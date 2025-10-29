@@ -35,4 +35,4 @@ Whether you’re booking a quick city ride, planning a safari adventure, or send
 
 ### Clone the repository
 ```bash
-git clone https://github.com/your-username/safari-ride.git
+git clone https://github.com/Mohamednoor2453/Safari-Ride.git
