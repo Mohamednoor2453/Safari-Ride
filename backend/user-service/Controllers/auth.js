@@ -5,7 +5,6 @@ const bcrypt = require('bcryptjs');
 const User = require('../Models/users');
 const OTP = require('../Models/Otp');
 
-// 🔐 Africa's Talking Credentials
 const Africastalking = require('africastalking')({
   apiKey: process.env.AT_API_KEY,
   username: process.env.AT_USERNAME,
@@ -15,7 +14,7 @@ const sms = Africastalking.SMS;
 // ✅ Regex to verify phone number (accepts 07xxxxxxxx or +2547xxxxxxxx)
 const phoneRegex = /^(?:\+254|0)[17]\d{8}$/;
 
-// ✅ OTP Generator
+// ✅ Generate OTP
 function generateOTP(length = 6) {
   const digits = '0123456789';
   let otp = '';
@@ -25,7 +24,7 @@ function generateOTP(length = 6) {
   return otp;
 }
 
-// ✅ Helper: Format phone number to +254 format
+// ✅ Helper to normalize phone to +254 format
 function formatPhoneNumber(phone) {
   let formatted = phone.toString().trim();
   if (formatted.startsWith('0')) {
@@ -34,7 +33,7 @@ function formatPhoneNumber(phone) {
   return formatted;
 }
 
-// ✅ Send SMS Function with retry + auto-fallback for sandbox/live
+// ✅ Send SMS
 function sendMessage(phone, otp) {
   const formattedPhone = phone.startsWith('+') ? phone : `+254${phone.slice(-9)}`;
   const fromValue = process.env.AT_ENV === 'sandbox' ? 'sandbox' : '';
@@ -51,7 +50,6 @@ function sendMessage(phone, otp) {
         const msg = response?.SMSMessageData?.Message || 'No message response';
         console.log('✅ Message successfully sent:', msg);
 
-        // Handle InvalidSenderId automatically
         if (msg.includes('InvalidSenderId')) {
           console.warn('⚠️ InvalidSenderId detected — retrying without sender ID...');
           delete options.from;
@@ -62,7 +60,6 @@ function sendMessage(phone, otp) {
       })
       .catch(error => {
         console.error('Error sending message:', error.message || error);
-        // Retry after 20 seconds
         setTimeout(() => sendMessage(phone, otp), 2000);
       });
   };
@@ -70,7 +67,7 @@ function sendMessage(phone, otp) {
   sendSMS();
 }
 
-// ✅ Login or Register Controller (no OTP verify logic)
+// ✅ Login or Register Controller
 exports.loginOrRegister = async (req, res) => {
   try {
     const { phone } = req.body;
@@ -80,7 +77,6 @@ exports.loginOrRegister = async (req, res) => {
     }
 
     const formattedPhone = formatPhoneNumber(phone);
-
     let existingUser = await User.findOne({ userPhoneNumber: formattedPhone });
 
     if (!existingUser) {
@@ -97,14 +93,10 @@ exports.loginOrRegister = async (req, res) => {
       }
     }
 
-    // 🧹 Delete old OTPs for this user
     await OTP.deleteMany({ userPhoneNumber: formattedPhone });
-
-    // 🔢 Generate and store new OTP
     const otp = generateOTP();
     await OTP.create({ userPhoneNumber: formattedPhone, otp });
 
-    // 📩 Send SMS
     sendMessage(formattedPhone, otp);
 
     res.status(200).json({
@@ -118,50 +110,53 @@ exports.loginOrRegister = async (req, res) => {
   }
 };
 
-//verify otp route
-// Export the verifyOtp function so it can be used in your routes
+// ✅ Verify OTP Controller
 exports.verifyOtp = async (req, res) => {
   try {
-    //Extract phone and otp from the request body
     const { phone, otp } = req.body;
 
-    //Check if both phone and otp exist
     if (!phone || !otp) {
       return res.status(400).json({ message: 'Phone number and OTP are required' });
     }
 
-    //Format the phone number to always start with +254
     const formattedPhone = phone.startsWith('+254')
-      ? phone                              // already formatted correctly
+      ? phone
       : phone.startsWith('0')
-      ? '+254' + phone.slice(1)            // change 07... → +2547...
-      : '+254' + phone.slice(-9);          // handle cases like 745xxxxxx
+      ? '+254' + phone.slice(1)
+      : '+254' + phone.slice(-9);
 
-    // Find the OTP record in the database using the formatted phone number
     const otpRecord = await OTP.findOne({ userPhoneNumber: formattedPhone });
-
-    //  If OTP record does not exist, return error (expired or invalid)
     if (!otpRecord) {
       return res.status(400).json({ message: 'OTP not found or expired' });
     }
 
-    //Compare the entered OTP with the one stored in the database
     if (otpRecord.otp !== otp) {
       return res.status(400).json({ message: 'Invalid OTP. Please try again.' });
     }
 
-    //If OTP matches, delete it from the database (so it can’t be reused)
     await OTP.deleteOne({ _id: otpRecord._id });
 
-    //Send success response back to frontend
+    // 🔐 ADMIN CHECK
+    const adminPhone = '+254' + process.env.ADMIN_PHONE.replace(/^0+/, '');
+    let redirectPage = '/allowLocation'; // default for users/drivers
+
+    if (formattedPhone === adminPhone) {
+      redirectPage = '/admin';
+      console.log('👑 Admin login detected, redirecting to admin panel...');
+    }
+
+    console.log('formattedPhone:', formattedPhone);
+    console.log('adminPhone:', adminPhone);
+    console.log('redirectPage:', redirectPage);
+
     res.status(200).json({
       message: 'OTP verified successfully',
       phone: formattedPhone,
       success: true,
-      redirect:'/allowLocation'
+      redirect: redirectPage,
     });
+
   } catch (error) {
-    
     console.error('Error verifying OTP:', error);
     res.status(500).json({ message: 'Internal Server Error' });
   }

@@ -7,7 +7,11 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+//routes('./
 const authRoutes = require('./Routes/auth.js');
+
+
+//routes apis
 app.use('/api', authRoutes);
 
 // Connect MongoDB
