@@ -62,11 +62,45 @@ exports.getDriverProfile = async (req, res) => {
                 phone: driver.plainPhone,
                 carType: driver.carType,
                 driverImage: driver.driverImage[0],
-                plainPlate: driver.plainPlate
+                plainPlate: driver.plainPlate,
+                online: driver.online
             }
         });
     } catch (error) {
         console.error(error);
         res.status(500).json({ success: false, error: "Internal server error" });
     }
+};
+
+
+
+// Toggle online status
+exports.toggleOnlineStatus = async (req, res) => {
+  try {
+    if (!req.session.user || !req.session.user.userId) {
+      return res.status(401).json({ success: false, error: "Not authenticated" });
+    }
+
+    const driverId = req.session.user.userId;
+
+    // Toggle online status in one go without triggering full validation
+    const driver = await Driver.findByIdAndUpdate(
+      driverId,
+      [{ $set: { online: { $not: "$online" } } }], // toggle
+      { new: true, runValidators: false } // ✅ avoid validation errors for required fields
+    );
+
+    if (!driver) {
+      return res.status(404).json({ success: false, error: "Driver not found" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      online: driver.online,
+      message: driver.online ? "You are now online" : "You are now offline",
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
 };

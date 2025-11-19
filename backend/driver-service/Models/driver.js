@@ -1,3 +1,4 @@
+// driver.js
 const mongoose = require('mongoose');
 
 const driverSchema = new mongoose.Schema({
@@ -12,6 +13,8 @@ const driverSchema = new mongoose.Schema({
 
     IdImage: { type: [String], required: true },
     driverImage: { type: [String], required: true },
+
+    online: { type: Boolean, default: false }, // <-- new field
 
     resetToken: { type: String, default: null },
 }, { timestamps: true });

@@ -11,6 +11,11 @@ const userSchema = new Schema({
     type: String,
     required: true,
   },
+  // ✅ Track last verification timestamp for 7-day session
+  lastVerifiedAt: {
+    type: Date,
+    default: null,
+  },
 });
 
 module.exports = mongoose.model('User', userSchema);

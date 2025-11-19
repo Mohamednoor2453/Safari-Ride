@@ -11,7 +11,7 @@ const Africastalking = require('africastalking')({
 });
 const sms = Africastalking.SMS;
 
-// ✅ Regex to verify phone number (accepts 07xxxxxxxx or +2547xxxxxxxx)
+// ✅ Regex to verify phone number
 const phoneRegex = /^(?:\+254|0)[17]\d{8}$/;
 
 // ✅ Generate OTP
@@ -24,7 +24,7 @@ function generateOTP(length = 6) {
   return otp;
 }
 
-// ✅ Helper to normalize phone to +254 format
+// ✅ Normalize phone number to +254
 function formatPhoneNumber(phone) {
   let formatted = phone.toString().trim();
   if (formatted.startsWith('0')) {
@@ -33,7 +33,9 @@ function formatPhoneNumber(phone) {
   return formatted;
 }
 
-// ✅ Send SMS
+
+
+  // ✅ Send SMS with retry for InvalidSenderId
 function sendMessage(phone, otp) {
   const formattedPhone = phone.startsWith('+') ? phone : `+254${phone.slice(-9)}`;
   const fromValue = process.env.AT_ENV === 'sandbox' ? 'sandbox' : '';
@@ -47,7 +49,7 @@ function sendMessage(phone, otp) {
   const sendSMS = () => {
     sms.send(options)
       .then(response => {
-        const msg = response?.SMSMessageData?.Message || 'No message response';
+        const msg = response?.SMSMessageData?.Message || '';
         console.log('✅ Message successfully sent:', msg);
 
         if (msg.includes('InvalidSenderId')) {
@@ -60,6 +62,7 @@ function sendMessage(phone, otp) {
       })
       .catch(error => {
         console.error('Error sending message:', error.message || error);
+        // Retry after 2s if any error occurs
         setTimeout(() => sendMessage(phone, otp), 2000);
       });
   };
@@ -67,7 +70,7 @@ function sendMessage(phone, otp) {
   sendSMS();
 }
 
-// ✅ Login or Register Controller
+// ------------------- LOGIN OR REGISTER -------------------
 exports.loginOrRegister = async (req, res) => {
   try {
     const { phone } = req.body;
@@ -79,20 +82,34 @@ exports.loginOrRegister = async (req, res) => {
     const formattedPhone = formatPhoneNumber(phone);
     let existingUser = await User.findOne({ userPhoneNumber: formattedPhone });
 
+    const now = new Date();
+    const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000; // 7 days in ms
+
     if (!existingUser) {
+      // New user → create and send OTP
       const hashedPhone = await bcrypt.hash(formattedPhone, 10);
       existingUser = await User.create({
         userPhoneNumber: formattedPhone,
         hashedPhone,
+        lastVerifiedAt: null,
       });
-      console.log('✅ New user registered:', formattedPhone);
     } else {
       const isSame = await bcrypt.compare(formattedPhone, existingUser.hashedPhone);
       if (!isSame) {
         return res.status(400).json({ message: 'Phone number does not match records' });
       }
+
+      // ✅ Check lastVerifiedAt
+      if (existingUser.lastVerifiedAt && (now - existingUser.lastVerifiedAt) < SEVEN_DAYS) {
+        return res.status(200).json({
+          message: 'User already verified',
+          phone: formattedPhone,
+          redirect: '/allowLocation',
+        });
+      }
     }
 
+    // ✅ If not verified or expired → send OTP
     await OTP.deleteMany({ userPhoneNumber: formattedPhone });
     const otp = generateOTP();
     await OTP.create({ userPhoneNumber: formattedPhone, otp });
@@ -104,13 +121,14 @@ exports.loginOrRegister = async (req, res) => {
       phone: formattedPhone,
       redirect: '/otp',
     });
+
   } catch (error) {
     console.error('Error in login/register:', error);
     res.status(500).json({ message: 'Internal Server Error' });
   }
 };
 
-// ✅ Verify OTP Controller
+// ------------------- VERIFY OTP -------------------
 exports.verifyOtp = async (req, res) => {
   try {
     const { phone, otp } = req.body;
@@ -134,20 +152,22 @@ exports.verifyOtp = async (req, res) => {
       return res.status(400).json({ message: 'Invalid OTP. Please try again.' });
     }
 
+    // ✅ Delete OTP after success
     await OTP.deleteOne({ _id: otpRecord._id });
+
+    // ✅ Update lastVerifiedAt for 7-day persistence
+    await User.updateOne(
+      { userPhoneNumber: formattedPhone },
+      { lastVerifiedAt: new Date() }
+    );
 
     // 🔐 ADMIN CHECK
     const adminPhone = '+254' + process.env.ADMIN_PHONE.replace(/^0+/, '');
-    let redirectPage = '/allowLocation'; // default for users/drivers
+    let redirectPage = '/allowLocation';
 
     if (formattedPhone === adminPhone) {
       redirectPage = '/admin';
-      console.log('👑 Admin login detected, redirecting to admin panel...');
     }
-
-    console.log('formattedPhone:', formattedPhone);
-    console.log('adminPhone:', adminPhone);
-    console.log('redirectPage:', redirectPage);
 
     res.status(200).json({
       message: 'OTP verified successfully',
