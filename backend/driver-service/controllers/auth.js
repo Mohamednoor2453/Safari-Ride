@@ -79,20 +79,23 @@ exports.registerDriver = async (req, res) => {
         // Encrypt fields
         const encryptedPhone = await encryptData(phone);
         const encryptedPlate = await encryptData(carPlate);
-        const encryptedDriverImage = await encryptData(image1);
+        const driverImage = image1;;
         const encryptedIdImage = await encryptData(image2);
 
         // Save
-        const newDriver = new Driver({
-            name,
-            phone: encryptedPhone,
-            plainPhone: phone,
-            carPlate: encryptedPlate,
-            plainPlate: carPlate,
-            carType,
-            driverImage: [encryptedDriverImage],
+            // Save
+const newDriver = new Driver({
+    name,
+    phone: encryptedPhone,
+    plainPhone: phone,
+    carPlate: encryptedPlate,
+    plainPlate: carPlate,
+    carType,
+    driverImage: [image1] // store raw URL
+});
+
             IdImage: [encryptedIdImage]
-        });
+        
 
         await newDriver.save();
         return res.status(201).json({ success: true, message: "Driver registered successfully" });

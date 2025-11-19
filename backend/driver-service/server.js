@@ -36,7 +36,11 @@ app.use(
 
 // ROUTES
 const driverAuthRoutes = require('./Routes/auth.js');
+const driverProfileRoutes= require("./Routes/driverProfile.js")
+
+//apis routes
 app.use('/api', driverAuthRoutes);
+app.use('/api', driverProfileRoutes)
 
 // START SERVER
 const PORT = process.env.PORT || 8000;
