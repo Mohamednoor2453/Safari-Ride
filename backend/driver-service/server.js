@@ -10,13 +10,13 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Connect MongoDB FIRST
+// mongo db connection
 mongoose
   .connect(process.env.dbURL)
   .then(() => console.log('✅ MongoDB connected'))
   .catch((err) => console.error('MongoDB error:', err));
 
-// SESSION (after MongoDB is connected)
+// SESSION setup
 app.use(
   session({
     secret: process.env.SESSION_SECRET_KEY,
