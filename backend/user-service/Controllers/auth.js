@@ -99,14 +99,15 @@ exports.loginOrRegister = async (req, res) => {
         return res.status(400).json({ message: 'Phone number does not match records' });
       }
 
-      // ✅ Check lastVerifiedAt
+      // Check lastVerifiedAt
       if (existingUser.lastVerifiedAt && (now - existingUser.lastVerifiedAt) < SEVEN_DAYS) {
-        return res.status(200).json({
-          message: 'User already verified',
-          phone: formattedPhone,
-          redirect: '/allowLocation',
-        });
-      }
+  return res.status(200).json({
+    message: 'User already verified',
+    phone: formattedPhone,
+    redirect: '/allowLocation'
+  });
+}
+
     }
 
     // ✅ If not verified or expired → send OTP
@@ -128,7 +129,7 @@ exports.loginOrRegister = async (req, res) => {
   }
 };
 
-// ------------------- VERIFY OTP -------------------
+// In your backend auth controller - verifyOtp function
 exports.verifyOtp = async (req, res) => {
   try {
     const { phone, otp } = req.body;
@@ -161,6 +162,13 @@ exports.verifyOtp = async (req, res) => {
       { lastVerifiedAt: new Date() }
     );
 
+    // ✅ Get the user data to return
+    const user = await User.findOne({ userPhoneNumber: formattedPhone });
+
+    if (!user) {
+      return res.status(400).json({ message: 'User not found' });
+    }
+
     // 🔐 ADMIN CHECK
     const adminPhone = '+254' + process.env.ADMIN_PHONE.replace(/^0+/, '');
     let redirectPage = '/allowLocation';
@@ -169,11 +177,13 @@ exports.verifyOtp = async (req, res) => {
       redirectPage = '/admin';
     }
 
+    // ✅ Return user data including ID
     res.status(200).json({
-      message: 'OTP verified successfully',
-      phone: formattedPhone,
       success: true,
-      redirect: redirectPage,
+      message: "OTP verified successfully",
+      phone: formattedPhone,
+      userId: user._id,
+      redirect: redirectPage
     });
 
   } catch (error) {
