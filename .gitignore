@@ -43,12 +43,13 @@ desktop.ini
 *.swo
 
 # === React Native / Expo ===
-.expo/
-.expo-shared/
-android/
-ios/
+frontend/.expo/
+frontend/.expo-shared/
+frontend/android/
+frontend/ios/
 *.keystore
 *.jks
+
 
 # === Misc ===
 *.bak
