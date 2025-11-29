@@ -2,7 +2,7 @@
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
-const RideDetails = require("../models/rideDetails");
+const RideDetails = require("../Models/rideDetails.js");
 const { calculateFare, getDistanceAndTime } = require('./fareCalculation.js');
 
 exports.fare_Calculation = async (req, res) => {

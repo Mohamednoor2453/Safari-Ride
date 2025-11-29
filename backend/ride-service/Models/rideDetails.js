@@ -55,7 +55,7 @@ const rideDetailsSchema = new mongoose.Schema({
 
     status: {
         type: String,
-        enum: ["searching", "driver_assigned", "on_trip", "completed", "cancelled"],
+        enum: ["searching", "driver_assigned"],
         default: "searching"
     }
 },

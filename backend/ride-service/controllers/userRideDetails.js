@@ -5,11 +5,13 @@ const RideDetails = require("../Models/rideDetails.js")
 const User = require("../../user-service/Models/users.js");
 
 exports.RideDetails = async (req, res)=>{
+  
     try {
-        const {
-            userId,
-            
-        } = req.body;
+
+        const rideDetails = req.params
+        
+        
+
     } catch (error) {
         
     }
