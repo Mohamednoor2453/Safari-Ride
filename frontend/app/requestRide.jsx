@@ -1,3 +1,4 @@
+// frontend/app/requestRide.jsx
 import React, { useEffect, useState, useContext } from 'react';
 import {
   StyleSheet, View, Text, ActivityIndicator, Alert, Linking,
@@ -11,9 +12,19 @@ import { CommonStyles } from '../components/CommonStyles';
 import PrimaryButton from '../components/PrimaryButton';
 import axios from 'axios';
 import { UserContext } from '../context/UserContext';
+import io from 'socket.io-client';
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 const FARE_API = "http://192.168.1.112:3005/api/fare";
+const SOCKET_URL = 'http://192.168.1.112:8000'; // ride-service socket server
+
+const popularNarokLocations = [
+  { name: "Iltanet Mall Narok", lat: -1.0961, lng: 35.8602, address: "Iltanet Mall, Narok, Kenya" },
+  { name: "Naivas Narok", lat: -1.0915, lng: 35.8578, address: "Naivas Supermarket, Narok, Kenya" },
+  { name: "Narok Referral Hospital", lat: -1.0869, lng: 35.8583, address: "Narok County Referral Hospital" },
+  { name: "Narok Town", lat: -1.0903, lng: 35.8612, address: "Narok Town Center" },
+  { name: "Maasai Mara University", lat: -1.1167, lng: 35.8333, address: "Maasai Mara University" },
+];
 
 const RideScreen = () => {
   const router = useRouter();
@@ -28,13 +39,7 @@ const RideScreen = () => {
   const [searching, setSearching] = useState(false);
   const [showResults, setShowResults] = useState(false);
 
-  const popularNarokLocations = [
-    { name: "Iltanet Mall Narok", lat: -1.0961, lng: 35.8602, address: "Iltanet Mall, Narok, Kenya" },
-    { name: "Naivas Narok", lat: -1.0915, lng: 35.8578, address: "Naivas Supermarket, Narok, Kenya" },
-    { name: "Narok Referral Hospital", lat: -1.0869, lng: 35.8583, address: "Narok County Referral Hospital" },
-    { name: "Narok Town", lat: -1.0903, lng: 35.8612, address: "Narok Town Center" },
-    { name: "Maasai Mara University", lat: -1.1167, lng: 35.8333, address: "Maasai Mara University" },
-  ];
+  const [socket, setSocket] = useState(null);
 
   useEffect(() => { 
     console.log('User context in requestRide:', user);
@@ -74,6 +79,35 @@ const RideScreen = () => {
       } finally { setLoadingLocation(false); }
     })();
   }, []);
+
+  useEffect(() => {
+    // connect to ride-service socket to listen for ride updates
+    const s = io(SOCKET_URL, { transports: ['websocket'], forceNew: true });
+    setSocket(s);
+
+    s.on('connect', () => console.log('connected to ride socket', s.id));
+
+    s.on('ride_update', (payload) => {
+      console.log('ride_update (user):', payload);
+      if (!payload) return;
+      // If the payload has ride id and matches user's active ride, show alerts etc.
+      // For simplicity, show alert when driver assigned or search failed
+      if (payload.status === 'driver_assigned') {
+        Alert.alert('Driver Assigned', `Driver ${payload.driver.name} is on the way. Car: ${payload.driver.carType} (${payload.driver.carPlate})`);
+        router.replace('/requestRide');
+      } else if (payload.status === 'search_failed') {
+        Alert.alert('No Drivers', 'No drivers available right now.');
+      }
+    });
+
+    s.on('disconnect', () => console.log('socket disconnected'));
+
+    return () => {
+      try { s.disconnect(); } catch (e) { /* ignore */ }
+    };
+  }, []);
+
+  // --- Missing helper functions (restored) ---
 
   const handleSearch = async (query) => {
     setSearchQuery(query);
@@ -121,20 +155,6 @@ const RideScreen = () => {
     Keyboard.dismiss();
   };
 
-  const handleRequestRide = async () => {
-    if (!pickup || !destination) { Alert.alert('Select Destination', 'Please pick a destination first.'); return; }
-    try {
-      const res = await axios.post(FARE_API, {
-        pickupLat: pickup.latitude, pickupLng: pickup.longitude,
-        destLat: destination.latitude, destLng: destination.longitude,
-        destinationName: destination.name, destinationAddress: destination.address,
-        userId: user._id, userPhone: user.phone
-      });
-      const { estimatedFare, details } = res.data;
-      router.push({ pathname: '/fare', params: { estimatedFare: estimatedFare.toString(), distance: details.distanceKm.toFixed(1), time: details.timeMinutes.toFixed(0), destinationName: destination.name, destinationAddress: destination.address || destination.name, currency: 'KES', surge: details.surge } });
-    } catch (err) { console.error(err); Alert.alert('Error', 'Failed to calculate fare. Try again.'); }
-  };
-
   const getMapRegion = () => {
     if (!pickup) return null;
     if (destination) {
@@ -146,6 +166,23 @@ const RideScreen = () => {
       };
     }
     return { ...pickup, latitudeDelta: 0.01, longitudeDelta: 0.01 };
+  };
+
+  // --- End helper functions ---
+
+  const handleRequestRide = async () => {
+    if (!pickup || !destination) { Alert.alert('Select Destination', 'Please pick a destination first.'); return; }
+    try {
+      const res = await axios.post(FARE_API, {
+        pickupLat: pickup.latitude, pickupLng: pickup.longitude,
+        destLat: destination.latitude, destLng: destination.longitude,
+        destinationName: destination.name, destinationAddress: destination.address,
+        userId: user._id, userPhone: user.phone
+      });
+      const { estimatedFare, details, rideId } = res.data;
+      // pass rideId to fare screen so the app can call match endpoint
+      router.push({ pathname: '/fare', params: { estimatedFare: estimatedFare.toString(), distance: details.distanceKm.toFixed(1), time: details.timeMinutes.toFixed(0), destinationName: destination.name, destinationAddress: destination.address || destination.name, currency: 'KES', surge: details.surge, rideId } });
+    } catch (err) { console.error(err); Alert.alert('Error', 'Failed to calculate fare. Try again.'); }
   };
 
   if (loadingLocation) return (

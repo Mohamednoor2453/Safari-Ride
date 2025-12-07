@@ -1,8 +1,9 @@
+// backend/driver-service/controllers/auth.js
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
 const bcrypt = require('bcrypt');
-const Driver = require('../Models/driver.js');
+const Driver = require("../../shared/models/Driver.js");
 const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
 
@@ -31,7 +32,7 @@ exports.uploadMiddleware = (req, res, next) => {
     });
 };
 
-// Encrypt
+// Encrypt helper
 const encryptData = async (val) => {
     if (!val) return "";
     const salt = await bcrypt.genSalt(10);
@@ -66,42 +67,39 @@ exports.registerDriver = async (req, res) => {
         // Check if exists by decrypt comparison
         const drivers = await Driver.find();
         for (let d of drivers) {
+            // note: d.phone and d.carPlate are expected to be hashed in DB
             const phoneMatch = await bcrypt.compare(phone.toString(), d.phone);
             const plateMatch = await bcrypt.compare(carPlate.toString(), d.carPlate);
             if (phoneMatch || plateMatch)
                 return res.status(400).json({ success: false, error: "Driver already exists" });
         }
 
-        // Upload images
-        const image1 = await uploadImage(req.files[0].buffer);
-        const image2 = await uploadImage(req.files[1].buffer);
+        // Upload images (expect at least two files: driver image, ID image)
+        const image1 = await uploadImage(req.files[0].buffer); // driver image URL
+        const image2 = await uploadImage(req.files[1].buffer); // id image URL
 
-        // Encrypt fields
+        // Encrypt fields (hash phone and plate)
         const encryptedPhone = await encryptData(phone);
         const encryptedPlate = await encryptData(carPlate);
-        const driverImage = image1;;
-        const encryptedIdImage = await encryptData(image2);
 
-        // Save
-            // Save
-const newDriver = new Driver({
-    name,
-    phone: encryptedPhone,
-    plainPhone: phone,
-    carPlate: encryptedPlate,
-    plainPlate: carPlate,
-    carType,
-    driverImage: [image1] // store raw URL
-});
-
-            IdImage: [encryptedIdImage]
-        
+        // Create new driver document and save
+        const newDriver = new Driver({
+            name,
+            phone: encryptedPhone,    // hashed phone (used for login comparisons)
+            plainPhone: phone,        // plain phone for display
+            carPlate: encryptedPlate, // hashed plate
+            plainPlate: carPlate,     // plain plate for display
+            carType,
+            driverImage: [image1],    // store raw driver image URL
+            IdImage: [image2]         // store raw ID image URL
+        });
 
         await newDriver.save();
+
         return res.status(201).json({ success: true, message: "Driver registered successfully" });
 
     } catch (error) {
-        console.error(error);
+        console.error("RegisterDriver error:", error);
         return res.status(500).json({ success: false, error: "Server error" });
     }
 };

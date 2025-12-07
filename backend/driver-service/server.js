@@ -1,4 +1,5 @@
 const express = require('express');
+const connectDB = require("../shared/db");
 const mongoose = require('mongoose');
 const MongoStore = require('connect-mongo');
 const path = require('path');
@@ -11,10 +12,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // mongo db connection
-mongoose
-  .connect(process.env.dbURL)
-  .then(() => console.log('✅ MongoDB connected'))
-  .catch((err) => console.error('MongoDB error:', err));
+connectDB();
 
 // SESSION setup
 app.use(

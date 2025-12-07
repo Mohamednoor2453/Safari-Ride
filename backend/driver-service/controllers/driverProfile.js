@@ -1,8 +1,9 @@
  const path = require('path');
  require('dotenv').config({ path: path.join(__dirname, '../.env') });
-
+const Driver = require("../../shared/models/Driver.js");
  const bcrypt = require('bcrypt');
- const Driver = require('../Models/driver.js');
+
+
  const cloudinary = require('cloudinary').v2;
  const multer = require('multer');
 
@@ -58,12 +59,13 @@ exports.getDriverProfile = async (req, res) => {
         return res.status(200).json({
             success: true,
             data: {
+                _id: driver._id,
                 name: driver.name,
                 phone: driver.plainPhone,
                 carType: driver.carType,
                 driverImage: driver.driverImage[0],
                 plainPlate: driver.plainPlate,
-                online: driver.online
+                online: driver.online || false
             }
         });
     } catch (error) {
@@ -74,33 +76,70 @@ exports.getDriverProfile = async (req, res) => {
 
 
 
-// Toggle online status
 exports.toggleOnlineStatus = async (req, res) => {
   try {
     if (!req.session.user || !req.session.user.userId) {
-      return res.status(401).json({ success: false, error: "Not authenticated" });
+      return res.status(401).json({ success: false, error: 'Not authenticated' });
     }
 
+    const { online, location, carType } = req.body;
     const driverId = req.session.user.userId;
 
-    // Toggle online status in one go without triggering full validation
+    const updateData = { 
+      online,
+      lastActive: new Date()
+    };
+
+    // If going online, update location and car type
+    if (online) {
+      if (location) {
+        updateData.location = {
+          type: 'Point',
+          coordinates: [location.lng, location.lat],
+          lastUpdated: new Date()
+        };
+      }
+      
+      if (carType) {
+        updateData.carType = carType;
+      }
+    }
+
     const driver = await Driver.findByIdAndUpdate(
-      driverId,
-      [{ $set: { online: { $not: "$online" } } }], // toggle
-      { new: true, runValidators: false } // ✅ avoid validation errors for required fields
+      driverId, 
+      { $set: updateData },
+      { new: true, runValidators: true }
     );
 
     if (!driver) {
-      return res.status(404).json({ success: false, error: "Driver not found" });
+      return res.status(404).json({ success: false, error: 'Driver not found' });
     }
 
-    return res.status(200).json({
-      success: true,
+    // Emit socket event if available
+    if (req.app.get('io') && online) {
+      const io = req.app.get('io');
+      io.emit('driver_status_changed', { 
+        driverId: driver._id, 
+        online: true,
+        location: updateData.location,
+        carType: driver.carType
+      });
+    }
+
+    res.status(200).json({ 
+      success: true, 
+      message: `Driver is now ${online ? 'online' : 'offline'}`,
       online: driver.online,
-      message: driver.online ? "You are now online" : "You are now offline",
+      location: updateData.location,
+      carType: driver.carType
     });
+
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, error: "Internal server error" });
+    console.error('❌ Error toggling online status:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to update status',
+      details: error.message 
+    });
   }
 };
