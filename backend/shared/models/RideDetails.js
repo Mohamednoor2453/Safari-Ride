@@ -1,3 +1,4 @@
+// backend/shared/models/RideDetails.js
 const mongoose = require("mongoose");
 
 const rideDetailsSchema = new mongoose.Schema({
@@ -23,7 +24,7 @@ const rideDetailsSchema = new mongoose.Schema({
 
     status: {
         type: String,
-        enum: ["searching", "driver_assigned", "search_failed", "cancelled"],
+        enum: ["searching", "driver_assigned", "in_progress", "completed", "cancelled", "search_failed"],
         default: "searching"
     },
 
@@ -34,6 +35,27 @@ const rideDetailsSchema = new mongoose.Schema({
         phone: String,
         carPlate: String,
         carType: String
+    },
+
+    cancellationReason: {
+        type: String,
+        enum: ["user_cancelled", "driver_cancelled", "system_cancelled", "timeout"],
+        default: null
+    },
+
+    startedAt: {
+        type: Date,
+        default: null
+    },
+
+    completedAt: {
+        type: Date,
+        default: null
+    },
+
+    cancelledAt: {
+        type: Date,
+        default: null
     },
 
     attempts: { type: Array, default: [] }
