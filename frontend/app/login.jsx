@@ -30,13 +30,30 @@ const Login = () => {
 
       if (!res.ok) return setError(data.message || "Error sending OTP");
 
+      console.log('Login response:', data);
+      
       // AUTO-REDIRECT if verified in last 7 days
-      if (data.redirect === "/allowLocation") {
-        router.push("/allowLocation");
+      if (data.redirect) {
+        console.log('Redirecting to:', data.redirect);
+        
+        if (data.redirect === "/admin") {
+          // Admin detected - go directly to admin panel
+          console.log('✅ Admin detected, going to admin panel');
+          router.push("/admin");
+        } else if (data.redirect === "/allowLocation") {
+          // Regular user - go to allowLocation
+          router.push("/allowLocation");
+        } else {
+          // Go to OTP screen
+          router.push({
+            pathname: "/otp",
+            params: { phone: data.phone }
+          });
+        }
         return;
       }
 
-      // Otherwise → OTP
+      // Default fallback → OTP
       router.push({
         pathname: "/otp",
         params: { phone: data.phone }

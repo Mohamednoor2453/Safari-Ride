@@ -1,25 +1,87 @@
-// backend/shared/models/Driver.js
-const mongoose = require("mongoose");
+const mongoose = require('mongoose');
 
-const driverSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  phone: { type: String, required: true },
-  plainPhone: { type: String },
-  carPlate: { type: String, required: true },
-  plainPlate: { type: String },
-  carType: { type: String, required: true },
-  IdImage: [{ type: String }],
-  driverImage: [{ type: String }],
-  online: { type: Boolean, default: false },
-  available: { type: Boolean, default: true },
+const DriverSchema = new mongoose.Schema(
+  {
+    name: { 
+      type: String, 
+      required: true,
+      trim: true 
+    },
 
-  lastKnownLocation: {
-    lat: { type: Number, default: null },
-    lng: { type: Number, default: null },
-    updatedAt: { type: Date, default: Date.now },
+    phone: { 
+      type: String, 
+      required: true 
+    }, // encrypted
+    
+    plainPhone: { 
+      type: String, 
+      required: true,
+      unique: true,
+      trim: true
+    }, // unencrypted for admin
+
+    carPlate: { 
+      type: String, 
+      required: true 
+    }, // encrypted
+    
+    plainPlate: { 
+      type: String, 
+      required: true,
+      unique: true,
+      trim: true,
+      uppercase: true
+    }, // unencrypted
+
+    carType: { 
+      type: String, 
+      required: true,
+      trim: true 
+    },
+
+    driverImage: { 
+      type: [String], 
+      default: [] 
+    },
+    
+    IdImage: { 
+      type: [String], 
+      default: [] 
+    },
+
+    verified: { 
+      type: Boolean, 
+      default: false 
+    },
+    
+    verifiedAt: { 
+      type: Date 
+    },
+
+    online: { 
+      type: Boolean, 
+      default: false 
+    },
+    
+    available: { 
+      type: Boolean, 
+      default: false 
+    },
+    
+    lastLogin: {
+      type: Date
+    }
   },
+  {
+    timestamps: true
+  }
+);
 
-  resetToken: { type: String, default: null },
-}, { timestamps: true });
+// Add indexes for better query performance
+DriverSchema.index({ plainPhone: 1 });
+DriverSchema.index({ plainPlate: 1 });
+DriverSchema.index({ verified: 1 });
+DriverSchema.index({ online: 1 });
+DriverSchema.index({ createdAt: -1 });
 
-module.exports = mongoose.models.Driver || mongoose.model("Driver", driverSchema);
+module.exports = mongoose.model('Driver', DriverSchema);

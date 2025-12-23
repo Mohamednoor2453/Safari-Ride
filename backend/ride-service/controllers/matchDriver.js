@@ -179,7 +179,7 @@ exports.matchDriverForRide = async (req, res) => {
 
         if (response && response.accepted) {
           assigned = { driverId, info: response.info || d };
-          console.log(`🎉 Driver ${driverId} accepted the ride!`, response.info);
+          console.log(`Driver ${driverId} accepted the ride!`, response.info);
 
           // Update ride with driver assignment
           ride.status = 'driver_assigned';
@@ -220,7 +220,7 @@ exports.matchDriverForRide = async (req, res) => {
     }
 
     if (!assigned) {
-      console.log('❌ No drivers accepted the ride');
+      console.log('No drivers accepted the ride');
       ride.status = 'search_failed';
       ride.attempts = attempts;
       await ride.save();

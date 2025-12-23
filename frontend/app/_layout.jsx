@@ -37,6 +37,10 @@ export default function RootLayout() {
           options={{ title: "Home", headerShown: false }}
         />
         <Stack.Screen name="login" options={{ title: "Login" }} />
+        <Stack.Screen 
+          name="otp" 
+          options={{ title: "Verify OTP" }} 
+        />
         <Stack.Screen
           name="requestRide"
           options={{ title: "Request Ride" }}
@@ -44,6 +48,19 @@ export default function RootLayout() {
         <Stack.Screen
           name="setDestination"
           options={{ title: "Set Destination" }}
+        />
+        <Stack.Screen
+          name="allowLocation"
+          options={{ title: "Allow Location" }}
+        />
+        {/* ADD THIS LINE - Admin Panel Route */}
+        <Stack.Screen
+          name="admin"
+          options={{ 
+            title: "Admin Panel",
+            headerShown: true,
+            headerBackVisible: true
+          }}
         />
       </Stack>
     </UserProvider>

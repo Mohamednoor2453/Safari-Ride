@@ -1,9 +1,14 @@
 // constants/Colors.js
-import { StyleSheet } from "react-native";
-
 export const Colors = {
   primary: "#046A38",
+  secondary: "#4A90E2", // Added this - valid React Native color
   accent: "#FFD700",
+  
+  // Optional: Add more color variations
+  success: "#4CAF50",
+  warning: "#FF9800",
+  error: "#F44336",
+  info: "#2196F3",
 
   dark: {
     text: "#d4d4d4",
@@ -13,6 +18,7 @@ export const Colors = {
     uiBackground: "#2f2b3d",
     accent: "#FFD700",
     primary: "#046A38",
+    secondary: "#4A90E2", // Also add to dark theme
   },
 
   light: {
@@ -23,14 +29,23 @@ export const Colors = {
     uiBackground: "#d6d5e1",
     accent: "#FFD700",
     primary: "#046A38",
+    secondary: "#4A90E2", // Also add to light theme
   },
+};
+
+// Optional: Helper function to get color based on theme
+export const getColor = (theme, colorName) => {
+  if (theme && Colors[theme] && Colors[theme][colorName]) {
+    return Colors[theme][colorName];
+  }
+  return Colors[colorName] || '#4A90E2'; // Default fallback
 };
 
 export const createAppStyles = (theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.primary,
+      backgroundColor: Colors.primary,
       alignItems: "center",
       justifyContent: "center",
       paddingHorizontal: 20,

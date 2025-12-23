@@ -33,9 +33,7 @@ function formatPhoneNumber(phone) {
   return formatted;
 }
 
-
-
-  // ✅ Send SMS with retry for InvalidSenderId
+// ✅ Send SMS with retry for InvalidSenderId
 function sendMessage(phone, otp) {
   const formattedPhone = phone.startsWith('+') ? phone : `+254${phone.slice(-9)}`;
   const fromValue = process.env.AT_ENV === 'sandbox' ? 'sandbox' : '';
@@ -70,6 +68,38 @@ function sendMessage(phone, otp) {
   sendSMS();
 }
 
+// ✅ Check if phone is admin
+function isAdminPhone(formattedPhone) {
+  const adminPhoneFromEnv = process.env.ADMIN_PHONE || '';
+  
+  if (!adminPhoneFromEnv) {
+    console.log('⚠️ ADMIN_PHONE not set in environment');
+    return false;
+  }
+  
+  // Normalize admin phone to +254 format
+  let normalizedAdminPhone;
+  if (adminPhoneFromEnv.startsWith('0')) {
+    // Remove only the first zero for +254 conversion
+    normalizedAdminPhone = '+254' + adminPhoneFromEnv.substring(1);
+  } else if (adminPhoneFromEnv.startsWith('+254')) {
+    normalizedAdminPhone = adminPhoneFromEnv;
+  } else if (adminPhoneFromEnv.startsWith('254')) {
+    normalizedAdminPhone = '+' + adminPhoneFromEnv;
+  } else {
+    // Assume it's 9 digits without country code (745827403)
+    normalizedAdminPhone = '+254' + adminPhoneFromEnv;
+  }
+  
+  console.log('🔐 Admin Check:');
+  console.log('  - User phone:', formattedPhone);
+  console.log('  - Admin phone from env:', adminPhoneFromEnv);
+  console.log('  - Normalized admin phone:', normalizedAdminPhone);
+  console.log('  - Is admin?', formattedPhone === normalizedAdminPhone);
+  
+  return formattedPhone === normalizedAdminPhone;
+}
+
 // ------------------- LOGIN OR REGISTER -------------------
 exports.loginOrRegister = async (req, res) => {
   try {
@@ -101,13 +131,22 @@ exports.loginOrRegister = async (req, res) => {
 
       // Check lastVerifiedAt
       if (existingUser.lastVerifiedAt && (now - existingUser.lastVerifiedAt) < SEVEN_DAYS) {
-  return res.status(200).json({
-    message: 'User already verified',
-    phone: formattedPhone,
-    redirect: '/allowLocation'
-  });
-}
-
+        // User is already verified within 7 days
+        // BUT we need to check if they're admin
+        let redirectPage = '/allowLocation';
+        
+        // Check if this is admin
+        if (isAdminPhone(formattedPhone)) {
+          redirectPage = '/admin';
+          console.log('✅ Admin detected in loginOrRegister (already verified)');
+        }
+        
+        return res.status(200).json({
+          message: 'User already verified',
+          phone: formattedPhone,
+          redirect: redirectPage
+        });
+      }
     }
 
     // ✅ If not verified or expired → send OTP
@@ -129,7 +168,7 @@ exports.loginOrRegister = async (req, res) => {
   }
 };
 
-// In your backend auth controller - verifyOtp function
+// ------------------- VERIFY OTP -------------------
 exports.verifyOtp = async (req, res) => {
   try {
     const { phone, otp } = req.body;
@@ -169,12 +208,13 @@ exports.verifyOtp = async (req, res) => {
       return res.status(400).json({ message: 'User not found' });
     }
 
-    // 🔐 ADMIN CHECK
-    const adminPhone = '+254' + process.env.ADMIN_PHONE.replace(/^0+/, '');
+    // 🔐 ADMIN CHECK - FIXED VERSION
     let redirectPage = '/allowLocation';
-
-    if (formattedPhone === adminPhone) {
+    
+    // Check if this is admin
+    if (isAdminPhone(formattedPhone)) {
       redirectPage = '/admin';
+      console.log('✅ Admin detected in verifyOtp, redirecting to /admin');
     }
 
     // ✅ Return user data including ID

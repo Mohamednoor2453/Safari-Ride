@@ -213,7 +213,7 @@ const cancelRide = async (rideId, reason = 'user_cancelled') => {
     console.log(`✅ Ride ${rideId} cancelled successfully`);
     return true;
   } catch (error) {
-    console.error('❌ Error cancelling ride:', error);
+    console.error('Error cancelling ride:', error);
     return false;
   }
 };
@@ -223,7 +223,7 @@ const startRide = async (rideId, driverId) => {
   try {
     const ride = await RideDetails.findById(rideId);
     if (!ride) {
-      console.log(`❌ Ride ${rideId} not found`);
+      console.log(`Ride ${rideId} not found`);
       return false;
     }
 
