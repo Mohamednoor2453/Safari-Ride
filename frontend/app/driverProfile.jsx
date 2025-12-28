@@ -1,4 +1,4 @@
-// frontend/app/driverProfile.jsx
+// frontend/app/driverProfile.jsx - FIXED VERSION
 import React, { useEffect, useState, useRef } from 'react';
 import {
   View,
@@ -12,64 +12,25 @@ import {
   Alert,
   AppState,
   Linking,
-  Vibration
+  Modal
 } from 'react-native';
 import { Colors } from '../constants/Colors';
 import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
 import io from 'socket.io-client';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const SOCKET_URL = 'http://192.168.1.112:3005';
 const PROFILE_API = 'http://192.168.1.112:3004/api/driverProfile';
 const TOGGLE_ONLINE_API = 'http://192.168.1.112:3004/api/toggleOnline';
 const RIDE_API = "http://192.168.1.112:3005/api/ride";
-
-// Simple storage helpers
-const storageHelpers = {
-  setItem: async (key, value) => {
-    try {
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem(key, JSON.stringify(value));
-      } else if (typeof AsyncStorage !== 'undefined') {
-        await AsyncStorage.setItem(key, JSON.stringify(value));
-      }
-    } catch (error) {
-      console.error('Storage error:', error);
-    }
-  },
-  
-  getItem: async (key) => {
-    try {
-      if (typeof localStorage !== 'undefined') {
-        const item = localStorage.getItem(key);
-        return item ? JSON.parse(item) : null;
-      } else if (typeof AsyncStorage !== 'undefined') {
-        const item = await AsyncStorage.getItem(key);
-        return item ? JSON.parse(item) : null;
-      }
-    } catch (error) {
-      console.error('Storage error:', error);
-      return null;
-    }
-  },
-  
-  removeItem: async (key) => {
-    try {
-      if (typeof localStorage !== 'undefined') {
-        localStorage.removeItem(key);
-      } else if (typeof AsyncStorage !== 'undefined') {
-        await AsyncStorage.removeItem(key);
-      }
-    } catch (error) {
-      console.error('Storage error:', error);
-    }
-  }
-};
+const PAYMENT_API = "http://192.168.1.112:3007/api/payments";
 
 // Storage keys
+const DRIVER_TOKEN_KEY = 'driverToken';
+const DRIVER_INFO_KEY = 'driverInfo';
 const DRIVER_STATE_KEY = 'driver_state_data';
-const DRIVER_SESSION_KEY = 'driver_session_data';
 
 export default function DriverProfile() {
   const [profile, setProfile] = useState(null);
@@ -82,67 +43,140 @@ export default function DriverProfile() {
   const [rideStatus, setRideStatus] = useState(null);
   const [startingRide, setStartingRide] = useState(false);
   const [endingRide, setEndingRide] = useState(false);
+  const [showPaymentOptions, setShowPaymentOptions] = useState(false);
+  const [processingPayment, setProcessingPayment] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState(null);
+  const [paymentModalVisible, setPaymentModalVisible] = useState(false);
+  const [paymentSuccess, setPaymentSuccess] = useState(false);
+  const [completedRide, setCompletedRide] = useState(null);
+  const [authError, setAuthError] = useState(null);
+  
   const socketRef = useRef(null);
   const locationWatcherRef = useRef(null);
   const router = useRouter();
   const appState = useRef(AppState.currentState);
-
-  // Use ref for profile to access current value in socket callbacks
   const profileRef = useRef(null);
+
+  // Get authentication headers
+  const getAuthHeaders = async () => {
+    const token = await AsyncStorage.getItem(DRIVER_TOKEN_KEY);
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    return headers;
+  };
+
+  // Fetch driver profile
+  const fetchProfile = async () => {
+    try {
+      console.log('🔍 Fetching driver profile...');
+      setAuthError(null);
+      
+      const headers = await getAuthHeaders();
+      
+      const res = await fetch(PROFILE_API, {
+        method: 'GET',
+        headers: headers,
+      });
+
+      const data = await res.json();
+      console.log('📄 Profile API Response:', data);
+      
+      if (data.success) {
+        const profileData = { 
+          ...data.data, 
+          online: data.data.online || false 
+        };
+        
+        if (!profileData._id) {
+          console.log('❌ No _id field in profile response');
+          setAuthError('Driver ID not found in profile');
+          return;
+        }
+        
+        setProfile(profileData);
+        profileRef.current = profileData;
+        
+        // Set online status from profile
+        setOnline(profileData.online || false);
+        
+        console.log('✅ Profile loaded - Name:', profileData.name, 'ID:', profileData._id);
+        
+        // Register with socket
+        if (profileData._id && socketRef.current && socketConnected) {
+          console.log('🚗 Registering driver with socket:', profileData._id);
+          socketRef.current.emit('register_driver', { 
+            driverId: profileData._id.toString(),
+            name: profileData.name,
+            carType: profileData.carType
+          });
+        }
+        
+        // Load any saved ride state
+        const savedState = await AsyncStorage.getItem(DRIVER_STATE_KEY);
+        if (savedState) {
+          try {
+            const state = JSON.parse(savedState);
+            if (state.currentRide && Date.now() - (state.savedAt || 0) < 3600000) {
+              setCurrentRide(state.currentRide);
+              fetchRideStatus(state.currentRide.rideId);
+            }
+          } catch (e) {
+            console.error('Error loading saved state:', e);
+          }
+        }
+      } else {
+        console.log('❌ Profile load failed:', data.error || data.message);
+        setAuthError(data.error || data.message || 'Failed to load profile');
+        
+        // If authentication failed, redirect to login
+        if (data.error?.includes('logged in') || data.message?.includes('logged in')) {
+          Alert.alert(
+            'Session Expired',
+            'Please login again',
+            [
+              { 
+                text: 'Login', 
+                onPress: () => {
+                  AsyncStorage.clear();
+                  router.replace('/driverLogin');
+                }
+              }
+            ]
+          );
+        }
+      }
+    } catch (error) {
+      console.error('❌ Profile fetch error:', error);
+      setAuthError('Network error: ' + error.message);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
 
   // Save driver state
   const saveDriverState = async (state) => {
     try {
-      await storageHelpers.setItem(DRIVER_STATE_KEY, {
+      await AsyncStorage.setItem(DRIVER_STATE_KEY, JSON.stringify({
         ...state,
         savedAt: Date.now()
-      });
-    } catch (error) {
-      console.error('Error saving driver state:', error);
-    }
-  };
-
-  // Load driver state
-  const loadDriverState = async () => {
-    try {
-      const savedState = await storageHelpers.getItem(DRIVER_STATE_KEY);
-      if (savedState) {
-        const state = JSON.parse(savedState);
-        const isRecent = Date.now() - (state.savedAt || 0) < 3600000; // 1 hour
-        
-        if (isRecent) {
-          setOnline(state.online || false);
-          if (state.currentRide) {
-            setCurrentRide(state.currentRide);
-            fetchRideStatus(state.currentRide.rideId);
-          }
-          return state;
-        }
-      }
-    } catch (error) {
-      console.error('Error loading driver state:', error);
-    }
-    return null;
-  };
-
-  // Save driver session
-  const saveDriverSession = async () => {
-    try {
-      await storageHelpers.setItem(DRIVER_SESSION_KEY, JSON.stringify({
-        driverId: profile?._id,
-        lastActive: Date.now(),
-        currentScreen: 'driverProfile',
-        online: online
       }));
     } catch (error) {
-      console.error('Error saving driver session:', error);
+      console.error('Error saving driver state:', error);
     }
   };
 
   // Clear driver state
   const clearDriverState = async () => {
     try {
-      await storageHelpers.removeItem(DRIVER_STATE_KEY);
+      await AsyncStorage.removeItem(DRIVER_STATE_KEY);
     } catch (error) {
       console.error('Error clearing driver state:', error);
     }
@@ -161,102 +195,28 @@ export default function DriverProfile() {
     }
   };
 
-  const fetchProfile = async () => {
-    try {
-      console.log('🔍 Fetching driver profile...');
-      const res = await fetch(PROFILE_API, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-      });
-
-      const data = await res.json();
-      console.log('📄 Profile API Response:', data);
-      
-      if (data.success) {
-        const profileData = { 
-          ...data.data, 
-          online: data.data.online || false 
-        };
-        
-        if (!profileData._id) {
-          console.log('❌ CRITICAL: No _id field in profile response!');
-          Alert.alert('Error', 'Driver ID not found in profile');
-          return;
-        }
-        
-        setProfile(profileData);
-        profileRef.current = profileData;
-        
-        // Load saved state
-        const savedState = await loadDriverState();
-        if (savedState && savedState.online !== undefined) {
-          setOnline(savedState.online);
-          console.log('✅ Loaded saved driver state, online:', savedState.online);
-        } else {
-          setOnline(profileData.online || false);
-        }
-        
-        console.log('✅ Profile loaded - Name:', profileData.name, 'ID:', profileData._id);
-        
-        // Register with socket if we have ID and socket is connected
-        if (profileData._id && socketRef.current && socketConnected) {
-          console.log('🚗 Re-registering driver with socket:', profileData._id);
-          socketRef.current.emit('register_driver', { driverId: profileData._id.toString() });
-        }
-      } else {
-        setProfile(null);
-        profileRef.current = null;
-        console.log('❌ Profile load failed:', data.error);
-      }
-    } catch (error) {
-      console.error('❌ Profile fetch error:', error);
-      setProfile(null);
-      profileRef.current = null;
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
-
   useEffect(() => {
     fetchProfile();
-    
-    // Save session when component mounts
-    saveDriverSession();
     
     // Handle app state changes
     const subscription = AppState.addEventListener('change', nextAppState => {
       console.log('Driver app state changed:', appState.current, '->', nextAppState);
       
-      if (
-        appState.current.match(/inactive|background/) &&
-        nextAppState === 'active'
-      ) {
+      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
         console.log('Driver app came to foreground!');
         
-        // Save session
-        saveDriverSession();
-        
-        // Show any pending notifications
+        // Show pending notifications
         if (pendingNotifications.length > 0) {
           showPendingNotifications();
-        }
-        
-        // Request pending notifications from server
-        if (socketRef.current?.connected && profileRef.current?._id) {
-          socketRef.current.emit("get_pending_notifications", { 
-            userId: profileRef.current._id, 
-            userType: 'driver' 
-          });
         }
         
         // Reconnect socket if needed
         if (socketRef.current && !socketRef.current.connected) {
           socketRef.current.connect();
         }
+        
+        // Refresh profile
+        fetchProfile();
       }
       
       appState.current = nextAppState;
@@ -287,9 +247,11 @@ export default function DriverProfile() {
       // Register driver when socket connects AND profile is loaded
       if (profileRef.current && profileRef.current._id) {
         console.log('🚗 Auto-registering driver with ID:', profileRef.current._id);
-        s.emit('register_driver', { driverId: profileRef.current._id.toString() });
-      } else {
-        console.log('⚠️ Profile not loaded yet, will register when available');
+        s.emit('register_driver', { 
+          driverId: profileRef.current._id.toString(),
+          name: profileRef.current.name,
+          carType: profileRef.current.carType
+        });
       }
     });
 
@@ -316,25 +278,9 @@ export default function DriverProfile() {
       handleNotification(notification);
     });
 
-    // Handle pending notifications
-    s.on('pending_notifications', ({ notifications }) => {
-      console.log(`📱 Driver received ${notifications?.length || 0} pending notifications`);
-      if (notifications && notifications.length > 0) {
-        notifications.forEach(notification => {
-          handleNotification(notification);
-        });
-      }
-    });
-
     s.on('ride_request', (payload) => {
       console.log('🎯 RIDE REQUEST RECEIVED!', payload);
       if (!payload) return;
-      
-      // Notify server that ride request was sent
-      s.emit('ride_request_sent', { 
-        driverId: profileRef.current?._id,
-        rideId: payload.rideId 
-      });
       
       const currentProfile = profileRef.current;
       if (!currentProfile || !currentProfile._id) {
@@ -342,6 +288,12 @@ export default function DriverProfile() {
         Alert.alert('Error', 'Driver profile not loaded. Please refresh and try again.');
         return;
       }
+      
+      // Notify server that ride request was received
+      s.emit('ride_request_received', { 
+        driverId: currentProfile._id,
+        rideId: payload.rideId 
+      });
       
       // Check if app is in background
       const isAppInBackground = appState.current !== 'active';
@@ -388,12 +340,31 @@ export default function DriverProfile() {
       // Clear saved state
       clearDriverState();
       
-      // Show alert
       Alert.alert(
         'Ride Cancelled',
         'The user has cancelled the ride. You are now available for new requests.',
         [{ text: 'OK' }]
       );
+    });
+
+    // Handle payment confirmation
+    s.on('payment_confirmed', (payload) => {
+      console.log('💰 Payment confirmed:', payload);
+      
+      if (payload.rideId === currentRide?.rideId) {
+        setPaymentSuccess(true);
+        Alert.alert('Payment Successful', `Payment of ${payload.amount} KES confirmed!`);
+        
+        // Clear everything after successful payment
+        setTimeout(() => {
+          setCurrentRide(null);
+          setRideStatus(null);
+          setShowPaymentOptions(false);
+          setPaymentSuccess(false);
+          setCompletedRide(null);
+          clearDriverState();
+        }, 3000);
+      }
     });
 
     return () => {
@@ -408,15 +379,7 @@ export default function DriverProfile() {
   // Update profileRef when profile changes
   useEffect(() => {
     profileRef.current = profile;
-    
-    // Save state when profile changes
-    if (profile) {
-      saveDriverState({
-        online,
-        profile: { _id: profile._id, name: profile.name }
-      });
-    }
-  }, [profile, online]);
+  }, [profile]);
 
   const showRideRequestAlert = (payload, socket, currentProfile) => {
     Alert.alert(
@@ -550,6 +513,162 @@ export default function DriverProfile() {
     }
   };
   
+  // Process M-Pesa Payment
+  const processMpesaPayment = async () => {
+    if (!currentRide?.rideId || !currentRide?.userPhone || !currentRide?.fare) {
+      Alert.alert('Error', 'Missing ride information for payment');
+      return;
+    }
+
+    try {
+      setProcessingPayment(true);
+      setPaymentMethod('mpesa');
+      
+      console.log('💰 Processing M-Pesa payment...');
+      
+      // Call your payment service
+      const response = await fetch(`${PAYMENT_API}/mpesa/stk-push`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          rideId: currentRide.rideId,
+          userPhone: currentRide.userPhone,
+          amount: currentRide.fare,
+          driverId: profile?._id,
+          driverName: profile?.name,
+          description: `Safari Ride Payment - ${currentRide.destination}`
+        }),
+      });
+
+      const data = await response.json();
+      
+      if (data.success) {
+        setPaymentSuccess(true);
+        Alert.alert(
+          'Payment Initiated',
+          `M-Pesa payment request sent to ${currentRide.userPhone}. Amount: ${currentRide.fare} KES`,
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                setPaymentModalVisible(true);
+              }
+            }
+          ]
+        );
+        
+        // Notify socket server
+        if (socketRef.current) {
+          socketRef.current.emit('payment_initiated', {
+            rideId: currentRide.rideId,
+            amount: currentRide.fare,
+            method: 'mpesa',
+            status: 'pending'
+          });
+        }
+      } else {
+        Alert.alert('Payment Failed', data.error || 'Failed to initiate M-Pesa payment');
+        setProcessingPayment(false);
+        setPaymentMethod(null);
+      }
+    } catch (error) {
+      console.error('M-Pesa payment error:', error);
+      Alert.alert('Payment Error', 'Failed to process M-Pesa payment');
+      setProcessingPayment(false);
+      setPaymentMethod(null);
+    }
+  };
+
+  // Process Cash Payment
+  const processCashPayment = async () => {
+    if (!currentRide?.rideId || !currentRide?.fare) {
+      Alert.alert('Error', 'Missing ride information for payment');
+      return;
+    }
+
+    Alert.alert(
+      'Confirm Cash Payment',
+      `Mark this ride as paid in cash?\n\nAmount: ${currentRide.fare} KES`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Confirm Payment',
+          onPress: async () => {
+            try {
+              setProcessingPayment(true);
+              setPaymentMethod('cash');
+              
+              console.log('💰 Processing cash payment...');
+              
+              // Call payment service to record cash payment
+              const response = await fetch(`${PAYMENT_API}/cash`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  rideId: currentRide.rideId,
+                  amount: currentRide.fare,
+                  driverId: profile?._id,
+                  driverName: profile?.name,
+                  paymentMethod: 'cash'
+                }),
+              });
+
+              const data = await response.json();
+              
+              if (data.success) {
+                setPaymentSuccess(true);
+                
+                // Notify socket server
+                if (socketRef.current) {
+                  socketRef.current.emit('payment_completed', {
+                    rideId: currentRide.rideId,
+                    amount: currentRide.fare,
+                    method: 'cash',
+                    status: 'completed'
+                  });
+                }
+                
+                Alert.alert(
+                  'Payment Recorded',
+                  `Cash payment of ${currentRide.fare} KES has been recorded.`,
+                  [
+                    {
+                      text: 'OK',
+                      onPress: () => {
+                        // Clear everything after payment
+                        setCurrentRide(null);
+                        setRideStatus(null);
+                        setShowPaymentOptions(false);
+                        setPaymentSuccess(false);
+                        setCompletedRide(null);
+                        clearDriverState();
+                        setProcessingPayment(false);
+                        setPaymentMethod(null);
+                      }
+                    }
+                  ]
+                );
+              } else {
+                Alert.alert('Payment Failed', data.error || 'Failed to record cash payment');
+                setProcessingPayment(false);
+                setPaymentMethod(null);
+              }
+            } catch (error) {
+              console.error('Cash payment error:', error);
+              Alert.alert('Payment Error', 'Failed to process cash payment');
+              setProcessingPayment(false);
+              setPaymentMethod(null);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   // End ride function
   const endRide = async () => {
     if (!currentRide?.rideId || !profile?._id) {
@@ -580,17 +699,26 @@ export default function DriverProfile() {
               const data = await res.json();
               
               if (data.success) {
-                // Clear current ride
-                setCurrentRide(null);
-                setRideStatus(null);
-                
-                // Clear saved state
-                clearDriverState();
+                setRideStatus('completed');
+                setShowPaymentOptions(true);
+                setCompletedRide(currentRide);
                 
                 Alert.alert(
                   'Ride Completed',
-                  'You have successfully completed the ride.',
-                  [{ text: 'OK' }]
+                  'Please collect payment from the passenger.',
+                  [
+                    { 
+                      text: 'OK', 
+                      onPress: () => {
+                        saveDriverState({
+                          online: true,
+                          currentRide: currentRide,
+                          rideStatus: 'completed',
+                          showPaymentOptions: true
+                        });
+                      }
+                    }
+                  ]
                 );
               } else {
                 Alert.alert('Error', data.message || 'Failed to end ride');
@@ -615,11 +743,9 @@ export default function DriverProfile() {
         return false;
       }
 
-      // Get initial location
       const location = await Location.getCurrentPositionAsync({});
       const { latitude, longitude } = location.coords;
 
-      // Send initial location to socket
       if (socketRef.current && profileRef.current?._id) {
         socketRef.current.emit('driver_location', { 
           driverId: profileRef.current._id.toString(), 
@@ -628,7 +754,6 @@ export default function DriverProfile() {
           available: true 
         });
         
-        // Register with socket
         socketRef.current.emit('register_driver', { 
           driverId: profileRef.current._id.toString(),
           location: { lat: latitude, lng: longitude },
@@ -636,7 +761,6 @@ export default function DriverProfile() {
         });
       }
 
-      // Start location watcher
       locationWatcherRef.current = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.Balanced,
@@ -687,7 +811,6 @@ export default function DriverProfile() {
     try {
       const newOnlineStatus = !online;
       
-      // Get current location for going online
       let location = null;
       if (newOnlineStatus) {
         const { status } = await Location.requestForegroundPermissionsAsync();
@@ -700,16 +823,16 @@ export default function DriverProfile() {
         location = { lat: loc.coords.latitude, lng: loc.coords.longitude };
       }
 
-      // Update online status via API
+      const headers = await getAuthHeaders();
+      
       const res = await fetch(TOGGLE_ONLINE_API, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         body: JSON.stringify({ 
           online: newOnlineStatus,
           location,
           carType: profile.carType || 'Standard'
         }),
-        credentials: 'include',
       });
 
       const data = await res.json();
@@ -717,29 +840,20 @@ export default function DriverProfile() {
       if (data.success) {
         setOnline(newOnlineStatus);
         
-        // Save state
-        saveDriverState({
-          online: newOnlineStatus,
-          profile: { _id: profile._id, name: profile.name }
-        });
-        
         if (newOnlineStatus) {
-          // Start location updates
           const started = await startLocationUpdates();
           if (started) {
-            Alert.alert('✅ You are now online', 'You will receive ride requests even when the app is in background.');
+            Alert.alert('✅ You are now online', 'You will receive ride requests.');
           }
         } else {
-          // Stop location updates
           stopLocationUpdates();
-          // Clear current ride
           setCurrentRide(null);
           setRideStatus(null);
+          setShowPaymentOptions(false);
           clearDriverState();
           Alert.alert('⏸️ You are now offline', 'You will not receive ride requests.');
         }
         
-        // Refresh profile
         fetchProfile();
       } else {
         Alert.alert('Error', data.error || 'Failed to update status');
@@ -748,6 +862,94 @@ export default function DriverProfile() {
       console.error('❌ Toggle online error:', error);
       Alert.alert('Error', 'Network error. Please try again.');
     }
+  };
+
+  const logout = async () => {
+    try {
+      await AsyncStorage.clear();
+      clearDriverState();
+      router.replace('/driverLogin');
+    } catch (error) {
+      console.error('Logout error:', error);
+      Alert.alert('Error', 'Failed to logout');
+    }
+  };
+
+  // Render payment options
+  const renderPaymentOptions = () => {
+    if (!showPaymentOptions || !completedRide) return null;
+    
+    return (
+      <View style={styles.paymentCard}>
+        <Text style={styles.paymentTitle}>💳 Collect Payment</Text>
+        <Text style={styles.paymentAmount}>{completedRide.fare} KES</Text>
+        <Text style={styles.paymentSubtitle}>Select payment method:</Text>
+        
+        <View style={styles.paymentButtonsContainer}>
+          <TouchableOpacity 
+            style={[styles.paymentButton, styles.mpesaButton]}
+            onPress={processMpesaPayment}
+            disabled={processingPayment}
+          >
+            {processingPayment && paymentMethod === 'mpesa' ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Ionicons name="phone-portrait" size={24} color="#fff" />
+                <Text style={styles.paymentButtonText}>Pay via M-Pesa</Text>
+              </>
+            )}
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={[styles.paymentButton, styles.cashButton]}
+            onPress={processCashPayment}
+            disabled={processingPayment}
+          >
+            {processingPayment && paymentMethod === 'cash' ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Ionicons name="cash" size={24} color="#fff" />
+                <Text style={styles.paymentButtonText}>Pay in Cash</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+        
+        {processingPayment && (
+          <Text style={styles.processingText}>
+            Processing {paymentMethod === 'mpesa' ? 'M-Pesa' : 'Cash'} payment...
+          </Text>
+        )}
+        
+        <TouchableOpacity 
+          style={styles.skipPaymentButton}
+          onPress={() => {
+            Alert.alert(
+              'Skip Payment',
+              'Are you sure? This will mark the ride as completed without payment.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Skip',
+                  style: 'destructive',
+                  onPress: () => {
+                    setCurrentRide(null);
+                    setRideStatus(null);
+                    setShowPaymentOptions(false);
+                    setCompletedRide(null);
+                    clearDriverState();
+                  }
+                }
+              ]
+            );
+          }}
+        >
+          <Text style={styles.skipPaymentText}>Skip Payment for Now</Text>
+        </TouchableOpacity>
+      </View>
+    );
   };
 
   const renderCurrentRideCard = () => {
@@ -760,7 +962,6 @@ export default function DriverProfile() {
         <Text style={styles.currentRideText}>User: {currentRide.userPhone}</Text>
         <Text style={styles.currentRideText}>Fare: {currentRide.fare} KES</Text>
         
-        {/* Ride Status */}
         {rideStatus && (
           <View style={styles.rideStatusContainer}>
             <View style={[
@@ -773,13 +974,12 @@ export default function DriverProfile() {
             ]} />
             <Text style={styles.rideStatusText}>
               {rideStatus === 'in_progress' ? 'In Progress' : 
-               rideStatus === 'completed' ? 'Completed' : 
+               rideStatus === 'completed' ? 'Completed - Awaiting Payment' : 
                'Assigned'}
             </Text>
           </View>
         )}
         
-        {/* Call User Button */}
         <TouchableOpacity 
           style={styles.callUserButton}
           onPress={callUser}
@@ -788,7 +988,6 @@ export default function DriverProfile() {
           <Text style={styles.callUserText}>Call User</Text>
         </TouchableOpacity>
         
-        {/* Start/End Ride Buttons */}
         <View style={styles.rideActionsContainer}>
           {rideStatus !== 'in_progress' && rideStatus !== 'completed' && (
             <TouchableOpacity 
@@ -837,6 +1036,26 @@ export default function DriverProfile() {
     );
   }
 
+  if (!profile && authError) {
+    return (
+      <View style={styles.errorContainer}>
+        <Ionicons name="warning" size={80} color="#ff4444" />
+        <Text style={styles.errorTitle}>Unable to load profile</Text>
+        <Text style={styles.errorMessage}>{authError}</Text>
+        
+        <View style={styles.errorButtons}>
+          <TouchableOpacity style={styles.retryButton} onPress={fetchProfile}>
+            <Text style={styles.retryText}>Retry</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity style={styles.loginButton} onPress={logout}>
+            <Text style={styles.loginText}>Go to Login</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
   if (!profile) {
     return (
       <View style={styles.loadingContainer}>
@@ -854,7 +1073,7 @@ export default function DriverProfile() {
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
     >
       <Image
-        source={{ uri: profile.driverImage }}
+        source={{ uri: profile.driverImage || 'https://via.placeholder.com/150' }}
         style={styles.profileImage}
       />
 
@@ -868,6 +1087,8 @@ export default function DriverProfile() {
         </Text>
       </View>
 
+      {renderPaymentOptions()}
+      
       {renderCurrentRideCard()}
 
       <View style={styles.card}>
@@ -890,7 +1111,6 @@ export default function DriverProfile() {
         <Text style={styles.value}>{profile.plainPlate}</Text>
       </View>
 
-      {/* Pending Notifications */}
       {pendingNotifications.length > 0 && (
         <TouchableOpacity 
           style={styles.notificationsButton}
@@ -903,7 +1123,6 @@ export default function DriverProfile() {
         </TouchableOpacity>
       )}
 
-      {/* Go Online / Offline Button */}
       <TouchableOpacity
         style={[
           styles.onlineButton,
@@ -925,10 +1144,7 @@ export default function DriverProfile() {
 
       <TouchableOpacity
         style={styles.logoutButton}
-        onPress={() => {
-          clearDriverState();
-          router.replace('/login');
-        }}
+        onPress={logout}
       >
         <Text style={styles.logoutText}>Logout</Text>
       </TouchableOpacity>
@@ -954,6 +1170,31 @@ const styles = StyleSheet.create({
     marginTop: 10,
     fontSize: 16,
   },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Colors.primary,
+    padding: 20,
+  },
+  errorTitle: {
+    color: '#fff',
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginTop: 20,
+    marginBottom: 10,
+  },
+  errorMessage: {
+    color: '#fff',
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 30,
+    opacity: 0.9,
+  },
+  errorButtons: {
+    flexDirection: 'row',
+    gap: 15,
+  },
   errorText: {
     color: '#fff',
     fontSize: 18,
@@ -962,13 +1203,25 @@ const styles = StyleSheet.create({
   },
   retryButton: {
     backgroundColor: Colors.secondary,
-    paddingVertical: 10,
+    paddingVertical: 12,
     paddingHorizontal: 30,
     borderRadius: 25,
   },
   retryText: {
     color: '#fff',
     fontSize: 16,
+    fontWeight: '600',
+  },
+  loginButton: {
+    backgroundColor: '#4CAF50',
+    paddingVertical: 12,
+    paddingHorizontal: 30,
+    borderRadius: 25,
+  },
+  loginText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
   profileImage: {
     width: 150,
@@ -1003,6 +1256,83 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: '600',
+  },
+  paymentCard: {
+    width: '90%',
+    backgroundColor: '#fff',
+    padding: 20,
+    borderRadius: 15,
+    marginBottom: 15,
+    borderLeftWidth: 6,
+    borderLeftColor: '#FF9800',
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  paymentTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: Colors.primary,
+    marginBottom: 5,
+    textAlign: 'center',
+  },
+  paymentAmount: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#4CAF50',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  paymentSubtitle: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 15,
+  },
+  paymentButtonsContainer: {
+    flexDirection: 'column',
+    gap: 10,
+    marginBottom: 15,
+  },
+  paymentButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 15,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    gap: 10,
+  },
+  mpesaButton: {
+    backgroundColor: '#4CAF50',
+  },
+  cashButton: {
+    backgroundColor: '#2196F3',
+  },
+  paymentButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  processingText: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    fontStyle: 'italic',
+    marginBottom: 10,
+  },
+  skipPaymentButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ccc',
+    alignItems: 'center',
+  },
+  skipPaymentText: {
+    color: '#666',
+    fontSize: 14,
   },
   currentRideCard: {
     width: '90%',

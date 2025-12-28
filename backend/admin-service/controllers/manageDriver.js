@@ -8,15 +8,15 @@ const Driver = require("../../shared/models/Driver");
  */
 exports.getUnverifiedDrivers = async (req, res) => {
   try {
-    console.log('📋 Fetching unverified drivers...');
+    console.log('Fetching unverified drivers...');
     
-    // Query 1: Drivers with verified = false
+    //Drivers with verified = false
     const unverifiedDrivers = await Driver.find({ verified: false })
       .sort({ createdAt: -1 });
     
-    console.log(`✅ Found ${unverifiedDrivers.length} drivers with verified: false`);
+    console.log(`Found ${unverifiedDrivers.length} drivers with verified: false`);
     
-    // Query 2: Drivers where verified field doesn't exist (backward compatibility)
+    //Drivers where verified field doesn't exist (backward compatibility)
     const noVerifiedFieldDrivers = await Driver.find({ 
       verified: { $exists: false } 
     }).sort({ createdAt: -1 });
