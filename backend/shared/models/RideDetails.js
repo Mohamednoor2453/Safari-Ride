@@ -24,8 +24,8 @@ const rideDetailsSchema = new mongoose.Schema({
 
     status: {
         type: String,
-        enum: ["searching", "driver_assigned", "in_progress", "completed", "cancelled", "search_failed"],
-        default: "searching"
+        enum: ["pending", "searching", "driver_assigned", "in_progress", "completed", "cancelled", "search_failed"],
+        default: "pending"
     },
 
     assignedDriver: { type: mongoose.Schema.Types.ObjectId, ref: "Driver", default: null },

@@ -1,4 +1,4 @@
-// backend/ride-service/controllers/matchDriver.js
+// ride-service/controllers/matchDriver.js - COMPLETELY FIXED VERSION
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const mongoose = require("mongoose");
@@ -79,7 +79,7 @@ exports.matchDriverForRide = async (req, res) => {
         if (!lat || !lng) {
           return { 
             driver: d, 
-            distanceMeters: 100000, // 100km default for drivers without location
+            distanceMeters: 100000,
             distanceKm: 100,
             hasLocation: false 
           };
@@ -93,23 +93,14 @@ exports.matchDriverForRide = async (req, res) => {
           hasLocation: true 
         };
       })
-      .filter(d => d.distanceMeters <= 500000) // Increased to 500km to include all drivers
+      .filter(d => d.distanceMeters <= 500000)
       .sort((a, b) => {
-        // Prioritize drivers with actual locations
         if (a.hasLocation && !b.hasLocation) return -1;
         if (!a.hasLocation && b.hasLocation) return 1;
         return a.distanceMeters - b.distanceMeters;
       });
 
     console.log(`After filtering: ${sortedDrivers.length} drivers available`);
-    
-    if (sortedDrivers.length > 0) {
-      console.log('Driver distances:', sortedDrivers.map(d => ({
-        id: d.driver._id.toString().substring(0, 8),
-        distance: d.distanceKm + 'km',
-        hasLocation: d.hasLocation
-      })));
-    }
 
     if (sortedDrivers.length === 0) {
       ride.status = 'search_failed';
@@ -124,7 +115,7 @@ exports.matchDriverForRide = async (req, res) => {
       return res.status(200).json({ success: false, message: 'No drivers available in your area.' });
     }
 
-    const REQUEST_TIMEOUT_MS = 25000; // 25 seconds timeout
+    const REQUEST_TIMEOUT_MS = 25000;
     const attempts = [];
     let assigned = null;
 
@@ -133,7 +124,7 @@ exports.matchDriverForRide = async (req, res) => {
       const d = entry.driver;
       const driverId = d._id.toString();
       
-      console.log(`Requesting ride from driver ${driverId} (${entry.distanceKm} km away, hasLocation: ${entry.hasLocation})`);
+      console.log(`Requesting ride from driver ${driverId} (${entry.distanceKm} km away)`);
       
       attempts.push({ 
         driverId, 
@@ -149,12 +140,12 @@ exports.matchDriverForRide = async (req, res) => {
         continue;
       }
 
-      // Prepare ride request payload
+      // ✅ CRITICAL FIX: Make sure userPhone is clearly included
       const requestPayload = {
         rideId: ride._id.toString(),
         pickup: ride.pickupCoordinates,
         destination: ride.destinationCoordinates,
-        userPhone: ride.userPhone,
+        userPhone: ride.userPhone, // User's phone from ride
         userId: ride.userId?.toString() || null,
         destinationName: ride.destinationName,
         destinationAddress: ride.destinationAddress,
@@ -164,12 +155,13 @@ exports.matchDriverForRide = async (req, res) => {
         timestamp: new Date().toISOString()
       };
 
+      console.log(`📱 Sending ride request to driver ${driverId} for user: ${ride.userPhone}`);
+
       // Send ride request to driver
       sock.emit('ride_request', requestPayload);
       console.log(`✓ Sent ride_request to driver ${driverId}`);
 
       try {
-        // Wait for driver response with timeout using the new helper
         const response = await Promise.race([
           waitForDriverResponse(ride._id.toString(), driverId, REQUEST_TIMEOUT_MS),
           new Promise((_, reject) => 
@@ -179,28 +171,45 @@ exports.matchDriverForRide = async (req, res) => {
 
         if (response && response.accepted) {
           assigned = { driverId, info: response.info || d };
-          console.log(`Driver ${driverId} accepted the ride!`, response.info);
+          console.log(`Driver ${driverId} accepted the ride!`);
 
           // Update ride with driver assignment
           ride.status = 'driver_assigned';
           ride.assignedDriver = new mongoose.Types.ObjectId(driverId);
           ride.driverInfo = {
             name: response.info?.name || d.name,
-            phone: response.info?.phone || d.plainPhone,
+            phone: response.info?.phone || d.plainPhone, // Driver's phone
             carPlate: response.info?.carPlate || d.plainPlate,
             carType: response.info?.carType || d.carType
           };
           ride.attempts = attempts;
           await ride.save();
 
-          // Notify driver
-          sock.emit('ride_confirmed_to_driver', { 
+          // ✅ CRITICAL FIX: Create comprehensive confirmation payload
+          const confirmationPayload = { 
             rideId: ride._id.toString(), 
-            userPhone: ride.userPhone, 
+            userPhone: ride.userPhone, // User's phone - MUST BE FROM RIDE
             destination: ride.destinationName,
             pickup: ride.pickupCoordinates,
-            fare: ride.fare
-          });
+            fare: ride.fare,
+            destinationAddress: ride.destinationAddress,
+            distance: ride.distance,
+            time: ride.time,
+            // Add driver info for reference
+            driver: {
+              name: response.info?.name || d.name,
+              phone: response.info?.phone || d.plainPhone, // Driver's phone
+              carPlate: response.info?.carPlate || d.plainPlate,
+              carType: response.info?.carType || d.carType
+            }
+          };
+
+          console.log(`📱 Sending confirmation to driver ${driverId}:`);
+          console.log(`   User phone: ${ride.userPhone}`);
+          console.log(`   Driver phone: ${response.info?.phone || d.plainPhone}`);
+
+          // Notify driver
+          sock.emit('ride_confirmed_to_driver', confirmationPayload);
 
           // Notify user
           io.emit('ride_update', {
@@ -245,7 +254,6 @@ exports.matchDriverForRide = async (req, res) => {
   } catch (error) {
     console.error('❌ matchDriverForRide error', error);
     
-    // Update ride status to failed if there was an error
     try {
       const ride = await RideDetails.findById(req.body.rideId);
       if (ride) {

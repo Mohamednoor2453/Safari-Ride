@@ -1,4 +1,4 @@
-// backend/ride-service/Routes/fare.js
+// backend/ride-service/routes/fare.js
 const express = require('express');
 const router = express.Router();
 const FareController = require('../controllers/fare.js');

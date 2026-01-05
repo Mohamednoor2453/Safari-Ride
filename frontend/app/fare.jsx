@@ -1,64 +1,22 @@
-// frontend/app/fare.jsx
-import React, { useEffect, useState, useContext, useRef } from 'react';
+// app/fare.jsx - FIXED VERSION (User stays on page when driver accepts)
+import React, { useEffect, useState, useRef } from 'react';
 import {
   StyleSheet, View, Text, SafeAreaView,
   ScrollView, Alert, ActivityIndicator,
   AppState, Platform, Vibration,
-  TouchableOpacity, Linking
+  TouchableOpacity, Linking, Dimensions
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Colors } from '../constants/Colors';
 import PrimaryButton from '../components/PrimaryButton';
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
-import { UserContext } from '../context/UserContext';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import io from 'socket.io-client';
 
 const SOCKET_URL = 'http://192.168.1.112:3005'; 
 const CANCEL_API = "http://192.168.1.112:3005/api/ride/cancel";
-
-// Simple storage helpers
-const storageHelpers = {
-  setItem: async (key, value) => {
-    try {
-      // Try localStorage for web, AsyncStorage for native
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem(key, JSON.stringify(value));
-      } else if (typeof AsyncStorage !== 'undefined') {
-        await AsyncStorage.setItem(key, JSON.stringify(value));
-      }
-    } catch (error) {
-      console.error('Storage error:', error);
-    }
-  },
-  
-  getItem: async (key) => {
-    try {
-      if (typeof localStorage !== 'undefined') {
-        const item = localStorage.getItem(key);
-        return item ? JSON.parse(item) : null;
-      } else if (typeof AsyncStorage !== 'undefined') {
-        const item = await AsyncStorage.getItem(key);
-        return item ? JSON.parse(item) : null;
-      }
-    } catch (error) {
-      console.error('Storage error:', error);
-      return null;
-    }
-  },
-  
-  removeItem: async (key) => {
-    try {
-      if (typeof localStorage !== 'undefined') {
-        localStorage.removeItem(key);
-      } else if (typeof AsyncStorage !== 'undefined') {
-        await AsyncStorage.removeItem(key);
-      }
-    } catch (error) {
-      console.error('Storage error:', error);
-    }
-  }
-};
+const MATCH_API = "http://192.168.1.112:3005/api/match";
 
 // Storage keys
 const RIDE_STATE_KEY = 'current_ride_state';
@@ -67,7 +25,7 @@ const USER_SESSION_KEY = 'user_session_data';
 const FareScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
-  const { user } = useContext(UserContext);
+  const [user, setUser] = useState(null);
 
   const { estimatedFare, currency, destinationName, destinationAddress,
     distance, time, surge, rideId } = params;
@@ -86,16 +44,39 @@ const FareScreen = () => {
   const appState = useRef(AppState.currentState);
   const notificationCountRef = useRef(0);
 
-  // Store notifications to show when app comes to foreground
+  // Add states for tracking view
+  const [showTracking, setShowTracking] = useState(false);
   const [pendingNotifications, setPendingNotifications] = useState([]);
+  const [driverAssignmentAlertShown, setDriverAssignmentAlertShown] = useState(false);
+
+  // Load user from storage
+  useEffect(() => {
+    const loadUser = async () => {
+      try {
+        console.log('🔍 Loading user for fare screen...');
+        const userString = await AsyncStorage.getItem('currentUser');
+        if (userString) {
+          const userData = JSON.parse(userString);
+          console.log('✅ User loaded:', userData);
+          setUser(userData);
+        } else {
+          console.log('❌ No user found');
+        }
+      } catch (error) {
+        console.error('Error loading user:', error);
+      }
+    };
+    
+    loadUser();
+  }, []);
 
   // Save ride state to storage
   const saveRideState = async (state) => {
     try {
-      await storageHelpers.setItem(RIDE_STATE_KEY, {
+      await AsyncStorage.setItem(RIDE_STATE_KEY, JSON.stringify({
         ...state,
         savedAt: Date.now()
-      });
+      }));
       console.log('💾 Ride state saved');
     } catch (error) {
       console.error('Error saving ride state:', error);
@@ -105,8 +86,9 @@ const FareScreen = () => {
   // Load ride state from storage
   const loadRideState = async () => {
     try {
-      const savedState = await storageHelpers.getItem(RIDE_STATE_KEY);
-      if (savedState) {
+      const savedStateString = await AsyncStorage.getItem(RIDE_STATE_KEY);
+      if (savedStateString) {
+        const savedState = JSON.parse(savedStateString);
         console.log('📂 Loaded saved ride state:', savedState);
         
         // Check if saved state is recent (within last hour)
@@ -119,17 +101,14 @@ const FareScreen = () => {
           setDriverInfo(savedState.driverInfo || null);
           
           if (savedState.rideStatus === 'driver_assigned' || savedState.rideStatus === 'in_progress') {
-            Alert.alert(
-              "Ride Restored",
-              `Your ride with ${savedState.driverInfo?.name || 'driver'} is still active.`,
-              [{ text: "Continue", onPress: () => {} }]
-            );
+            // Don't show alert automatically, just restore state
+            console.log('✅ Restored ride state without alert');
           }
           
           return savedState.rideId;
         } else {
           // Clear old state
-          await storageHelpers.removeItem(RIDE_STATE_KEY);
+          await AsyncStorage.removeItem(RIDE_STATE_KEY);
         }
       }
     } catch (error) {
@@ -141,7 +120,7 @@ const FareScreen = () => {
   // Clear ride state
   const clearRideState = async () => {
     try {
-      await storageHelpers.removeItem(RIDE_STATE_KEY);
+      await AsyncStorage.removeItem(RIDE_STATE_KEY);
       console.log('🗑️ Ride state cleared');
     } catch (error) {
       console.error('Error clearing ride state:', error);
@@ -151,7 +130,7 @@ const FareScreen = () => {
   // Save user session
   const saveUserSession = async () => {
     try {
-      await storageHelpers.setItem(USER_SESSION_KEY, JSON.stringify({
+      await AsyncStorage.setItem(USER_SESSION_KEY, JSON.stringify({
         userId: user?._id,
         lastActive: Date.now(),
         currentScreen: 'fare',
@@ -190,12 +169,22 @@ const FareScreen = () => {
                 setRideStatus(null);
                 setSearching(false);
                 setDriverInfo(null);
+                setShowTracking(false);
                 
-                // Show success message
+                // Show success message with option to stay or go back
                 Alert.alert(
                   "Ride Cancelled",
                   "Your ride has been cancelled successfully.",
-                  [{ text: "OK", onPress: () => router.replace("/requestRide") }]
+                  [
+                    { 
+                      text: "Stay Here", 
+                      style: "cancel" 
+                    },
+                    { 
+                      text: "Book New Ride", 
+                      onPress: () => router.replace("/requestRide") 
+                    }
+                  ]
                 );
               } else {
                 Alert.alert("Error", res.data.message || "Failed to cancel ride");
@@ -244,23 +233,6 @@ const FareScreen = () => {
     }
   };
 
-  // Handle notification
-  const handleNotification = (notification) => {
-    const isAppInBackground = appState.current !== 'active';
-    
-    if (notification.type === 'driver_accepted' && isAppInBackground) {
-      const notificationObj = {
-        id: Date.now(),
-        title: "🚗 Driver Accepted!",
-        message: notification.message,
-        type: 'driver_accepted',
-        payload: notification
-      };
-      setPendingNotifications(prev => [...prev, notificationObj]);
-      notificationCountRef.current++;
-    }
-  };
-
   // Function to show pending notifications when app comes to foreground
   const showPendingNotifications = () => {
     if (pendingNotifications.length === 0) {
@@ -284,20 +256,9 @@ const FareScreen = () => {
         latestNotification.message,
         [
           {
-            text: "Track Ride",
+            text: "OK",
             onPress: () => {
-              router.replace({
-                pathname: "/requestRide",
-                params: { 
-                  rideId: rideId,
-                  driverAssigned: true,
-                  driverName: driverName,
-                  carPlate: carPlate,
-                  carType: carType,
-                  driverPhone: driverPhone
-                }
-              });
-              // Clear all notifications after action
+              // Clear notifications after viewing
               setPendingNotifications([]);
               notificationCountRef.current = 0;
             }
@@ -311,7 +272,17 @@ const FareScreen = () => {
         latestNotification.message,
         [
           {
-            text: "OK",
+            text: "Try Again",
+            onPress: () => {
+              handleConfirmBooking();
+              // Clear notifications after viewing
+              setPendingNotifications([]);
+              notificationCountRef.current = 0;
+            }
+          },
+          {
+            text: "Go Back",
+            style: "cancel",
             onPress: () => {
               router.replace("/requestRide");
               // Clear all notifications after action
@@ -377,7 +348,23 @@ const FareScreen = () => {
     // Handle incoming notifications
     s.on("notification", (notification) => {
       console.log("📱 Notification received:", notification);
-      handleNotification(notification);
+      
+      // Handle driver accepted notifications
+      if (notification.type === 'driver_accepted') {
+        const isAppInBackground = appState.current !== 'active';
+        
+        if (isAppInBackground) {
+          const notificationObj = {
+            id: Date.now(),
+            title: "🚗 Driver Accepted!",
+            message: notification.message,
+            type: 'driver_accepted',
+            payload: notification
+          };
+          setPendingNotifications(prev => [...prev, notificationObj]);
+          notificationCountRef.current++;
+        }
+      }
     });
 
     // Handle pending notifications
@@ -385,7 +372,21 @@ const FareScreen = () => {
       console.log(`📱 Received ${notifications?.length || 0} pending notifications`);
       if (notifications && notifications.length > 0) {
         notifications.forEach(notification => {
-          handleNotification(notification);
+          if (notification.type === 'driver_accepted') {
+            const isAppInBackground = appState.current !== 'active';
+            
+            if (isAppInBackground) {
+              const notificationObj = {
+                id: Date.now(),
+                title: "🚗 Driver Accepted!",
+                message: notification.message,
+                type: 'driver_accepted',
+                payload: notification
+              };
+              setPendingNotifications(prev => [...prev, notificationObj]);
+              notificationCountRef.current++;
+            }
+          }
         });
       }
     });
@@ -434,26 +435,18 @@ const FareScreen = () => {
           console.log(`📱 Notification stored (background): Driver ${payload.driver.name} assigned`);
         }
         
-        // Show alert immediately if app is in foreground
-        if (!isAppInBackground) {
+        // Show alert immediately if app is in foreground - BUT NO AUTO REDIRECT
+        if (!isAppInBackground && !driverAssignmentAlertShown) {
+          setDriverAssignmentAlertShown(true);
           Alert.alert(
-            "Driver Assigned",
-            `Driver ${payload.driver.name} accepted.\nCar: ${payload.driver.carType} (${payload.driver.carPlate})`,
+            "🎉 Driver Found!",
+            `Driver ${payload.driver.name} accepted your ride.\nCar: ${payload.driver.carType} (${payload.driver.carPlate})`,
             [
               {
-                text: "Track Ride",
+                text: "Great! Stay Here",
                 onPress: () => {
-                  router.replace({
-                    pathname: "/requestRide",
-                    params: { 
-                      rideId: rideId,
-                      driverAssigned: true,
-                      driverName: payload.driver.name,
-                      carPlate: payload.driver.carPlate,
-                      carType: payload.driver.carType,
-                      driverPhone: payload.driver.phone
-                    }
-                  });
+                  // User stays on current page - NO REDIRECTION
+                  console.log("User chose to stay on fare page");
                 }
               }
             ],
@@ -491,7 +484,12 @@ const FareScreen = () => {
             "No drivers accepted the ride. Please try again.",
             [
               {
-                text: "OK",
+                text: "Try Again",
+                onPress: () => handleConfirmBooking()
+              },
+              {
+                text: "Go Back",
+                style: "cancel",
                 onPress: () => router.replace("/requestRide")
               }
             ]
@@ -510,15 +508,25 @@ const FareScreen = () => {
       setRideStatus('cancelled');
       setSearching(false);
       setDriverInfo(null);
+      setShowTracking(false);
       
       // Clear saved state
       clearRideState();
       
-      // Show notification
+      // Show notification with option to stay or go back
       Alert.alert(
         "Ride Cancelled",
         "Your ride has been cancelled.",
-        [{ text: "OK", onPress: () => router.replace("/requestRide") }]
+        [
+          { 
+            text: "Stay Here", 
+            style: "cancel" 
+          },
+          { 
+            text: "Book New Ride", 
+            onPress: () => router.replace("/requestRide") 
+          }
+        ]
       );
     });
     
@@ -530,10 +538,18 @@ const FareScreen = () => {
       
       setRideStatus('in_progress');
       
+      // NO AUTO REDIRECT - just show alert
       Alert.alert(
         "Ride Started",
         "Your ride has started. Driver is on the way.",
-        [{ text: "OK" }]
+        [
+          {
+            text: "OK",
+            onPress: () => {
+              // User stays on page
+            }
+          }
+        ]
       );
     });
     
@@ -546,14 +562,25 @@ const FareScreen = () => {
       // Clear state
       setRideStatus('completed');
       setDriverInfo(null);
+      setShowTracking(false);
       
       // Clear saved state
       clearRideState();
       
+      // Show option to book new ride or stay
       Alert.alert(
         "Ride Completed",
         `Your ride has been completed.\nFare: ${payload.fare || 'N/A'} KES`,
-        [{ text: "OK", onPress: () => router.replace("/requestRide") }]
+        [
+          { 
+            text: "Book New Ride", 
+            onPress: () => router.replace("/requestRide") 
+          },
+          { 
+            text: "Stay on Page", 
+            style: "cancel" 
+          }
+        ]
       );
     });
 
@@ -579,23 +606,16 @@ const FareScreen = () => {
         // Vibrate to notify user
         Vibration.vibrate([0, 500, 200, 500]);
         
+        // NO AUTO REDIRECT - user stays on page
         Alert.alert(
-          "Driver Accepted!",
-          `Driver ${payload.info?.name || 'Unknown'} accepted your ride.`,
+          "🎉 Driver Found!",
+          `Driver ${payload.info?.name || 'Unknown'} accepted your ride.\nCar: ${payload.info?.carType || 'N/A'}`,
           [
             {
-              text: "OK",
+              text: "Great! Stay Here",
               onPress: () => {
-                router.replace({
-                  pathname: "/requestRide",
-                  params: { 
-                    rideId: rideId,
-                    driverAssigned: true,
-                    driverName: payload.info?.name,
-                    carType: payload.info?.carType,
-                    driverPhone: payload.info?.phone
-                  }
-                });
+                // User stays on current page - NO REDIRECTION
+                console.log("User chose to stay on fare page");
               }
             }
           ]
@@ -678,6 +698,8 @@ const FareScreen = () => {
       setLoading(true);
       setSearching(true);
       setRideStatus('searching');
+      setDriverAssignmentAlertShown(false); // Reset alert flag
+      setShowTracking(false);
       
       // Save state
       saveRideState({
@@ -691,7 +713,7 @@ const FareScreen = () => {
       notificationCountRef.current = 0;
 
       console.log("Matching ride:", rideId);
-      const res = await axios.post("http://192.168.1.112:3005/api/match", {
+      const res = await axios.post(MATCH_API, {
         rideId,
         userPhone: user?.phone || 'Unknown',
         pickupLocation: params.pickupLocation || {},
@@ -730,6 +752,90 @@ const FareScreen = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Render tracking overlay
+  const renderTrackingView = () => {
+    if (!showTracking || !driverInfo) return null;
+    
+    return (
+      <View style={styles.trackingOverlay}>
+        <View style={styles.trackingCard}>
+          <TouchableOpacity 
+            style={styles.closeTrackingButton}
+            onPress={() => setShowTracking(false)}
+          >
+            <Ionicons name="close" size={24} color="#fff" />
+          </TouchableOpacity>
+          
+          <Text style={styles.trackingTitle}>🚗 Live Ride Tracking</Text>
+          
+          {/* Simulated map area */}
+          <View style={styles.mapPlaceholder}>
+            <View style={styles.mapIcons}>
+              <Ionicons name="location" size={40} color="#ff4444" />
+              <Text style={styles.mapArrow}>→</Text>
+              <Ionicons name="car" size={50} color={Colors.primary} />
+              <Text style={styles.mapArrow}>→</Text>
+              <Ionicons name="flag" size={40} color="#4CAF50" />
+            </View>
+            <Text style={styles.mapText}>Driver is on the way to your location</Text>
+            <Text style={styles.mapSubtext}>Estimated arrival: 5-10 minutes</Text>
+          </View>
+          
+          <View style={styles.trackingInfo}>
+            <View style={styles.driverRow}>
+              <Ionicons name="person-circle" size={40} color={Colors.primary} />
+              <View style={styles.driverDetails}>
+                <Text style={styles.driverInfo}>Driver: {driverInfo.name}</Text>
+                <Text style={styles.carInfo}>Car: {driverInfo.carType} {driverInfo.carPlate ? `(${driverInfo.carPlate})` : ''}</Text>
+                <Text style={styles.statusInfo}>
+                  Status: {rideStatus === 'in_progress' ? '🚗 On the way' : '📍 Arriving soon'}
+                </Text>
+              </View>
+            </View>
+            
+            <View style={styles.ratingContainer}>
+              <Text style={styles.ratingText}>Rating: 4.8 ★★★★☆</Text>
+              <Text style={styles.tripsText}>• 250+ trips completed</Text>
+            </View>
+          </View>
+          
+          <View style={styles.trackingButtons}>
+            <TouchableOpacity 
+              style={styles.callButton}
+              onPress={callDriver}
+            >
+              <Ionicons name="call" size={20} color="#fff" />
+              <Text style={styles.callButtonText}>Call Driver</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={styles.smsButton}
+              onPress={() => {
+                const phoneNumber = driverInfo.phone.startsWith('+') 
+                  ? driverInfo.phone 
+                  : `+254${driverInfo.phone.replace(/^0+/, '')}`;
+                Linking.openURL(`sms:${phoneNumber}`).catch(err => {
+                  Alert.alert("Error", "Could not open SMS.");
+                });
+              }}
+            >
+              <Ionicons name="chatbubble" size={20} color="#fff" />
+              <Text style={styles.smsButtonText}>Message</Text>
+            </TouchableOpacity>
+          </View>
+          
+          <TouchableOpacity 
+            style={styles.cancelTrackingButton}
+            onPress={cancelRide}
+          >
+            <Ionicons name="close-circle" size={20} color="#fff" />
+            <Text style={styles.cancelTrackingButtonText}>Cancel Ride</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
   };
 
   const renderStatusContent = () => {
@@ -778,30 +884,48 @@ const FareScreen = () => {
             
             {driverInfo && (
               <View style={styles.driverInfoContainer}>
-                <Text style={styles.driverName}>Driver: {driverInfo.name}</Text>
-                <Text style={styles.driverCar}>Car: {driverInfo.carType} {driverInfo.carPlate ? `(${driverInfo.carPlate})` : ''}</Text>
-                
-                {driverInfo.phone && (
-                  <View style={styles.phoneActions}>
-                    <TouchableOpacity 
-                      style={styles.callButton}
-                      onPress={callDriver}
-                    >
-                      <Ionicons name="call" size={20} color="#fff" />
-                      <Text style={styles.callButtonText}>Call Driver</Text>
-                    </TouchableOpacity>
-                    
-                    <TouchableOpacity 
-                      style={styles.copyButton}
-                      onPress={copyDriverPhone}
-                    >
-                      <Ionicons name="copy" size={20} color={Colors.primary} />
-                      <Text style={styles.copyButtonText}>Copy Phone</Text>
-                    </TouchableOpacity>
+                <View style={styles.driverHeader}>
+                  <Ionicons name="person-circle" size={50} color={Colors.primary} />
+                  <View style={styles.driverTextContainer}>
+                    <Text style={styles.driverName}>{driverInfo.name}</Text>
+                    <Text style={styles.driverCar}>{driverInfo.carType} {driverInfo.carPlate ? `(${driverInfo.carPlate})` : ''}</Text>
                   </View>
-                )}
+                </View>
+                
+                <View style={styles.ratingRow}>
+                  <Text style={styles.ratingStars}>★★★★☆</Text>
+                  <Text style={styles.ratingValue}>4.8</Text>
+                  <Text style={styles.dotSeparator}>•</Text>
+                  <Text style={styles.tripCount}>250+ trips</Text>
+                </View>
+                
+                <View style={styles.phoneActions}>
+                  <TouchableOpacity 
+                    style={styles.callButton}
+                    onPress={callDriver}
+                  >
+                    <Ionicons name="call" size={20} color="#fff" />
+                    <Text style={styles.callButtonText}>Call Driver</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity 
+                    style={styles.copyButton}
+                    onPress={copyDriverPhone}
+                  >
+                    <Ionicons name="copy" size={20} color={Colors.primary} />
+                    <Text style={styles.copyButtonText}>Copy Phone</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             )}
+            
+            <TouchableOpacity
+              style={styles.trackRideButton}
+              onPress={() => setShowTracking(true)}
+            >
+              <Ionicons name="map" size={20} color="#fff" />
+              <Text style={styles.trackRideText}>Track Ride Live</Text>
+            </TouchableOpacity>
             
             {/* Cancel Button */}
             <TouchableOpacity 
@@ -818,24 +942,6 @@ const FareScreen = () => {
                 </>
               )}
             </TouchableOpacity>
-            
-            <PrimaryButton
-              title="Track Ride"
-              onPress={() => {
-                router.replace({
-                  pathname: "/requestRide",
-                  params: { 
-                    rideId: rideId,
-                    driverAssigned: true,
-                    driverName: driverInfo?.name,
-                    carPlate: driverInfo?.carPlate,
-                    carType: driverInfo?.carType,
-                    driverPhone: driverInfo?.phone
-                  }
-                });
-              }}
-              style={{ marginTop: 10 }}
-            />
           </View>
         );
       case 'in_progress':
@@ -843,36 +949,55 @@ const FareScreen = () => {
           <View style={[styles.statusCard, styles.inProgressCard]}>
             <Ionicons name="car" size={60} color="#2196F3" />
             <Text style={styles.statusTitle}>Ride In Progress</Text>
-            <Text style={styles.statusSubtitle}>Your ride is currently ongoing</Text>
+            <Text style={styles.statusSubtitle}>Your driver is on the way to your destination</Text>
             
             {driverInfo && (
               <View style={styles.driverInfoContainer}>
-                <Text style={styles.driverName}>Driver: {driverInfo.name}</Text>
-                <Text style={styles.driverCar}>Car: {driverInfo.carType} {driverInfo.carPlate ? `(${driverInfo.carPlate})` : ''}</Text>
-                
-                {driverInfo.phone && (
-                  <View style={styles.phoneActions}>
-                    <TouchableOpacity 
-                      style={styles.callButton}
-                      onPress={callDriver}
-                    >
-                      <Ionicons name="call" size={20} color="#fff" />
-                      <Text style={styles.callButtonText}>Call Driver</Text>
-                    </TouchableOpacity>
-                    
-                    <TouchableOpacity 
-                      style={styles.copyButton}
-                      onPress={copyDriverPhone}
-                    >
-                      <Ionicons name="copy" size={20} color={Colors.primary} />
-                      <Text style={styles.copyButtonText}>Copy Phone</Text>
-                    </TouchableOpacity>
+                <View style={styles.driverHeader}>
+                  <Ionicons name="person-circle" size={50} color={Colors.primary} />
+                  <View style={styles.driverTextContainer}>
+                    <Text style={styles.driverName}>{driverInfo.name}</Text>
+                    <Text style={styles.driverCar}>{driverInfo.carType} {driverInfo.carPlate ? `(${driverInfo.carPlate})` : ''}</Text>
+                    <Text style={styles.rideStatus}>🚗 On the way to {destinationName || 'destination'}</Text>
                   </View>
-                )}
+                </View>
+                
+                <View style={styles.phoneActions}>
+                  <TouchableOpacity 
+                    style={styles.callButton}
+                    onPress={callDriver}
+                  >
+                    <Ionicons name="call" size={20} color="#fff" />
+                    <Text style={styles.callButtonText}>Call Driver</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity 
+                    style={styles.smsButton}
+                    onPress={() => {
+                      const phoneNumber = driverInfo.phone.startsWith('+') 
+                        ? driverInfo.phone 
+                        : `+254${driverInfo.phone.replace(/^0+/, '')}`;
+                      Linking.openURL(`sms:${phoneNumber}`).catch(err => {
+                        Alert.alert("Error", "Could not open SMS.");
+                      });
+                    }}
+                  >
+                    <Ionicons name="chatbubble" size={20} color="#fff" />
+                    <Text style={styles.smsButtonText}>Message</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             )}
             
-            <Text style={styles.statusNote}>Waiting for driver to complete the ride...</Text>
+            <TouchableOpacity
+              style={styles.trackRideButton}
+              onPress={() => setShowTracking(true)}
+            >
+              <Ionicons name="navigate" size={20} color="#fff" />
+              <Text style={styles.trackRideText}>View Live Tracking</Text>
+            </TouchableOpacity>
+            
+            <Text style={styles.statusNote}>You can track the ride live or contact your driver</Text>
           </View>
         );
       case 'completed':
@@ -882,11 +1007,16 @@ const FareScreen = () => {
             <Text style={styles.statusTitle}>Ride Completed!</Text>
             <Text style={styles.statusSubtitle}>Thank you for using Safari Ride</Text>
             
-            <PrimaryButton
-              title="Book Another Ride"
+            <Text style={styles.completedDetails}>
+              Fare: {currency || 'KES'} {fareValue}
+            </Text>
+            
+            <TouchableOpacity
+              style={styles.bookAgainButton}
               onPress={() => router.replace("/requestRide")}
-              style={{ marginTop: 20 }}
-            />
+            >
+              <Text style={styles.bookAgainText}>Book Another Ride</Text>
+            </TouchableOpacity>
           </View>
         );
       case 'cancelled':
@@ -896,11 +1026,12 @@ const FareScreen = () => {
             <Text style={styles.statusTitle}>Ride Cancelled</Text>
             <Text style={styles.statusSubtitle}>Your ride has been cancelled</Text>
             
-            <PrimaryButton
-              title="Book New Ride"
+            <TouchableOpacity
+              style={styles.bookAgainButton}
               onPress={() => router.replace("/requestRide")}
-              style={{ marginTop: 20 }}
-            />
+            >
+              <Text style={styles.bookAgainText}>Book New Ride</Text>
+            </TouchableOpacity>
           </View>
         );
       case 'search_failed':
@@ -909,11 +1040,19 @@ const FareScreen = () => {
             <Ionicons name="alert-circle" size={60} color="#F44336" />
             <Text style={styles.statusTitle}>No Drivers Available</Text>
             <Text style={styles.statusSubtitle}>Please try again in a few minutes</Text>
-            <PrimaryButton
-              title="Try Again"
+            <TouchableOpacity
+              style={styles.retryButton}
               onPress={handleConfirmBooking}
-              style={{ marginTop: 20 }}
-            />
+            >
+              <Text style={styles.retryText}>Try Again</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={styles.backButton}
+              onPress={() => router.replace("/requestRide")}
+            >
+              <Text style={styles.backText}>Back to Request</Text>
+            </TouchableOpacity>
           </View>
         );
       default:
@@ -985,6 +1124,9 @@ const FareScreen = () => {
           </View>
         )}
       </ScrollView>
+      
+      {/* Add the tracking overlay */}
+      {renderTrackingView()}
     </SafeAreaView>
   );
 };
@@ -1104,22 +1246,65 @@ const styles = StyleSheet.create({
     width: '100%',
     alignItems: 'center'
   },
+  driverHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    marginBottom: 15
+  },
+  driverTextContainer: {
+    marginLeft: 15,
+    flex: 1
+  },
   driverName: {
     fontSize: 18,
     fontWeight: '600',
     color: Colors.primary,
-    marginBottom: 5
+    marginBottom: 2
   },
   driverCar: {
     fontSize: 16,
     color: '#666',
-    marginBottom: 15
+    marginBottom: 5
+  },
+  rideStatus: {
+    fontSize: 14,
+    color: '#2196F3',
+    fontWeight: '600',
+    marginTop: 5
+  },
+  ratingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 15,
+    width: '100%'
+  },
+  ratingStars: {
+    fontSize: 14,
+    color: '#FFD700',
+    marginRight: 5
+  },
+  ratingValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#666',
+    marginRight: 10
+  },
+  dotSeparator: {
+    fontSize: 14,
+    color: '#999',
+    marginRight: 10
+  },
+  tripCount: {
+    fontSize: 14,
+    color: '#666'
   },
   phoneActions: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     width: '100%',
-    paddingHorizontal: 20
+    paddingHorizontal: 10
   },
   callButton: {
     flex: 1,
@@ -1156,6 +1341,22 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginLeft: 8
   },
+  smsButton: {
+    flex: 1,
+    backgroundColor: '#2196F3',
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    borderRadius: 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  smsButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 8
+  },
   cancelButton: {
     backgroundColor: '#ff4444',
     paddingHorizontal: 20,
@@ -1176,6 +1377,77 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     marginLeft: 8
+  },
+  trackRideButton: {
+    backgroundColor: Colors.secondary,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 25,
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%'
+  },
+  trackRideText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8
+  },
+  bookAgainButton: {
+    backgroundColor: Colors.secondary,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 25,
+    marginTop: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  bookAgainText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600'
+  },
+  retryButton: {
+    backgroundColor: Colors.secondary,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 25,
+    marginTop: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  retryText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600'
+  },
+  backButton: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 25,
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  backText: {
+    color: Colors.primary,
+    fontSize: 16,
+    fontWeight: '600'
+  },
+  completedDetails: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: Colors.primary,
+    marginTop: 10,
+    textAlign: 'center'
   },
   notificationNote: {
     fontSize: 14, 
@@ -1228,5 +1500,153 @@ const styles = StyleSheet.create({
   searchingContainer: {
     alignItems: 'center',
     marginTop: 20
-  }
+  },
+  // Tracking overlay styles
+  trackingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  trackingCard: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 25,
+    width: '90%',
+    maxHeight: '85%',
+    alignItems: 'center',
+  },
+  closeTrackingButton: {
+    position: 'absolute',
+    top: 15,
+    right: 15,
+    backgroundColor: '#ff4444',
+    borderRadius: 20,
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1001,
+  },
+  trackingTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: Colors.primary,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  mapPlaceholder: {
+    height: 200,
+    width: '100%',
+    backgroundColor: '#f5f5f5',
+    borderRadius: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 25,
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  mapIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '80%',
+    marginBottom: 15,
+  },
+  mapArrow: {
+    fontSize: 30,
+    color: '#666',
+  },
+  mapText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: Colors.primary,
+    textAlign: 'center',
+    marginBottom: 5,
+  },
+  mapSubtext: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+  },
+  trackingInfo: {
+    backgroundColor: '#f9f9f9',
+    padding: 20,
+    borderRadius: 15,
+    marginBottom: 20,
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#eee',
+  },
+  driverRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  driverDetails: {
+    marginLeft: 15,
+    flex: 1,
+  },
+  driverInfo: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: Colors.primary,
+    marginBottom: 5,
+  },
+  carInfo: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 5,
+  },
+  statusInfo: {
+    fontSize: 14,
+    color: '#2196F3',
+    fontWeight: '600',
+  },
+  ratingContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    padding: 10,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+  ratingText: {
+    fontSize: 14,
+    color: '#FFD700',
+    fontWeight: '600',
+    marginRight: 10,
+  },
+  tripsText: {
+    fontSize: 14,
+    color: '#666',
+  },
+  trackingButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 20,
+  },
+  cancelTrackingButton: {
+    backgroundColor: '#ff4444',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 25,
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelTrackingButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
 });

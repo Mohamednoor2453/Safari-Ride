@@ -1,4 +1,4 @@
-// frontend/app/driverProfile.jsx - FIXED VERSION
+// frontend/app/driverProfile.jsx - COMPLETELY FIXED VERSION
 import React, { useEffect, useState, useRef } from 'react';
 import {
   View,
@@ -106,7 +106,7 @@ export default function DriverProfile() {
         // Set online status from profile
         setOnline(profileData.online || false);
         
-        console.log('✅ Profile loaded - Name:', profileData.name, 'ID:', profileData._id);
+        console.log('✅ Profile loaded - Name:', profileData.name, 'ID:', profileData._id, 'Phone:', profileData.phone);
         
         // Register with socket
         if (profileData._id && socketRef.current && socketConnected) {
@@ -114,7 +114,8 @@ export default function DriverProfile() {
           socketRef.current.emit('register_driver', { 
             driverId: profileData._id.toString(),
             name: profileData.name,
-            carType: profileData.carType
+            carType: profileData.carType,
+            phone: profileData.phone // Include driver phone for reference
           });
         }
         
@@ -124,6 +125,7 @@ export default function DriverProfile() {
           try {
             const state = JSON.parse(savedState);
             if (state.currentRide && Date.now() - (state.savedAt || 0) < 3600000) {
+              console.log('📱 Loaded saved ride state - User phone:', state.currentRide.userPhone);
               setCurrentRide(state.currentRide);
               fetchRideStatus(state.currentRide.rideId);
             }
@@ -246,11 +248,12 @@ export default function DriverProfile() {
       
       // Register driver when socket connects AND profile is loaded
       if (profileRef.current && profileRef.current._id) {
-        console.log('🚗 Auto-registering driver with ID:', profileRef.current._id);
+        console.log('🚗 Auto-registering driver with ID:', profileRef.current._id, 'Phone:', profileRef.current.phone);
         s.emit('register_driver', { 
           driverId: profileRef.current._id.toString(),
           name: profileRef.current.name,
-          carType: profileRef.current.carType
+          carType: profileRef.current.carType,
+          phone: profileRef.current.phone
         });
       }
     });
@@ -289,6 +292,12 @@ export default function DriverProfile() {
         return;
       }
       
+      // ✅ CRITICAL: Verify phone numbers
+      console.log('📱 RIDE REQUEST PHONE VERIFICATION:');
+      console.log('   User phone from request:', payload.userPhone);
+      console.log('   Current driver phone:', currentProfile.phone);
+      console.log('   Are they the same?', payload.userPhone === currentProfile.phone);
+      
       // Notify server that ride request was received
       s.emit('ride_request_received', { 
         driverId: currentProfile._id,
@@ -303,7 +312,7 @@ export default function DriverProfile() {
         const notification = {
           id: Date.now(),
           title: '🚗 NEW RIDE REQUEST!',
-          message: `Pickup: ${payload.pickup?.lat ? `${payload.pickup.lat.toFixed(4)}, ${payload.pickup.lng.toFixed(4)}` : 'Location'}\nDestination: ${payload.destinationName || 'Not specified'}\nFare: ${payload.fare || '0'} KES`,
+          message: `Pickup: ${payload.pickup?.lat ? `${payload.pickup.lat.toFixed(4)}, ${payload.pickup.lng.toFixed(4)}` : 'Location'}\nDestination: ${payload.destinationName || 'Not specified'}\nFare: ${payload.fare || '0'} KES\nUser: ${payload.userPhone || 'Not specified'}`,
           type: 'ride_request',
           payload
         };
@@ -316,17 +325,41 @@ export default function DriverProfile() {
     });
 
     s.on('ride_confirmed_to_driver', (payload) => {
-      console.log('✅ Ride confirmed to driver:', payload);
+      console.log('✅ Ride confirmed to driver - FULL PAYLOAD:', JSON.stringify(payload, null, 2));
+      
+      // ✅ CRITICAL: Verify the phone number is the USER'S phone, not driver's
+      console.log('📱 RIDE CONFIRMATION PHONE VERIFICATION:');
+      console.log('   User phone from payload:', payload.userPhone);
+      console.log('   Driver phone from payload:', payload.driver?.phone);
+      console.log('   Current driver profile phone:', profileRef.current?.phone);
+      console.log('   Are user and driver phones the same?', payload.userPhone === profileRef.current?.phone);
+      
+      // ✅ Ensure we're saving the correct user phone
+      const currentRideData = {
+        ...payload,
+        // Make sure userPhone is explicitly set from payload
+        userPhone: payload.userPhone || 'Phone not available',
+        // Store driver phone separately for reference
+        driverPhone: payload.driver?.phone || profileRef.current?.phone
+      };
       
       // Save current ride state
-      setCurrentRide(payload);
+      setCurrentRide(currentRideData);
       setRideStatus('driver_assigned');
       saveDriverState({
         online: true,
-        currentRide: payload
+        currentRide: currentRideData
       });
       
-      Alert.alert('Ride Confirmed', `Ride to ${payload.destination} has been confirmed.`);
+      // Show confirmation with BOTH phones for debugging
+      Alert.alert(
+        'Ride Confirmed', 
+        `Ride to ${payload.destination} has been confirmed.\n\n` +
+        `👤 User: ${payload.userPhone || 'Not specified'}\n` +
+        `🚗 Your phone: ${profileRef.current?.phone || 'Not available'}` +
+        (payload.userPhone === profileRef.current?.phone ? 
+          '\n\n⚠️ WARNING: User phone matches your phone!' : '')
+      );
     });
 
     // Handle ride cancelled
@@ -382,14 +415,27 @@ export default function DriverProfile() {
   }, [profile]);
 
   const showRideRequestAlert = (payload, socket, currentProfile) => {
+    // ✅ Add phone verification
+    console.log('🎯 RIDE REQUEST ALERT VERIFICATION:');
+    console.log('   User phone from request:', payload.userPhone);
+    console.log('   Current driver phone:', currentProfile.phone);
+    console.log('   Driver ID:', currentProfile._id);
+    
     Alert.alert(
       '🚗 NEW RIDE REQUEST!',
-      `📍 Pickup: ${payload.pickup?.lat ? `${payload.pickup.lat.toFixed(4)}, ${payload.pickup.lng.toFixed(4)}` : 'Location not specified'}\n🎯 Destination: ${payload.destinationName || 'Not specified'}\n💰 Fare: ${payload.fare || '0'} KES\n📞 User: ${payload.userPhone || 'Not specified'}`,
+      `📍 Pickup: ${payload.pickup?.lat ? `${payload.pickup.lat.toFixed(4)}, ${payload.pickup.lng.toFixed(4)}` : 'Location not specified'}\n` +
+      `🎯 Destination: ${payload.destinationName || 'Not specified'}\n` +
+      `💰 Fare: ${payload.fare || '0'} KES\n` +
+      `📞 User Phone: ${payload.userPhone || 'Not specified'}\n` +
+      `📱 Your Phone: ${currentProfile.phone}\n\n` +
+      (payload.userPhone === currentProfile.phone ? 
+        '⚠️ WARNING: User phone matches your phone!' : ''),
       [
         { 
           text: '❌ DECLINE', 
           onPress: () => {
             console.log('Driver DECLINED ride:', payload.rideId);
+            console.log('Declining for user phone:', payload.userPhone);
             socket.emit('driver_response', { 
               rideId: payload.rideId, 
               driverId: currentProfile._id.toString(), 
@@ -403,6 +449,9 @@ export default function DriverProfile() {
           text: '✅ ACCEPT', 
           onPress: () => {
             console.log('Driver ACCEPTED ride:', payload.rideId);
+            console.log('Accepting for user phone:', payload.userPhone);
+            console.log('Sending driver info - Phone:', currentProfile.phone);
+            
             socket.emit('driver_response', { 
               rideId: payload.rideId, 
               driverId: currentProfile._id.toString(), 
@@ -411,10 +460,14 @@ export default function DriverProfile() {
                 name: currentProfile.name, 
                 carPlate: currentProfile.plainPlate,
                 carType: currentProfile.carType,
-                phone: currentProfile.phone
+                phone: currentProfile.phone // Driver's phone - should NOT be user's phone
               } 
             });
-            Alert.alert('Ride Accepted!', 'You have accepted the ride. Please proceed to the pickup location.');
+            Alert.alert('Ride Accepted!', 
+              `You have accepted the ride!\n\n` +
+              `User: ${payload.userPhone}\n` +
+              `Your phone: ${currentProfile.phone}`
+            );
           } 
         }
       ],
@@ -460,15 +513,39 @@ export default function DriverProfile() {
 
   // Function to call user
   const callUser = () => {
-    if (currentRide?.userPhone) {
-      const phoneNumber = currentRide.userPhone.startsWith('+') 
-        ? currentRide.userPhone 
-        : `+254${currentRide.userPhone.replace(/^0+/, '')}`;
-      
-      Linking.openURL(`tel:${phoneNumber}`).catch(err => {
-        Alert.alert("Error", "Could not make phone call.");
-        console.error('Error calling:', err);
-      });
+    if (currentRide?.userPhone && currentRide.userPhone !== 'Phone not available') {
+      // Verify we're calling the user, not ourselves
+      if (currentRide.userPhone === profile?.phone) {
+        Alert.alert(
+          "Warning", 
+          "This phone number matches your own number. Are you sure you want to call yourself?",
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { 
+              text: 'Call Anyway', 
+              onPress: () => {
+                const phoneNumber = currentRide.userPhone.startsWith('+') 
+                  ? currentRide.userPhone 
+                  : `+254${currentRide.userPhone.replace(/^0+/, '')}`;
+                
+                Linking.openURL(`tel:${phoneNumber}`).catch(err => {
+                  Alert.alert("Error", "Could not make phone call.");
+                  console.error('Error calling:', err);
+                });
+              }
+            }
+          ]
+        );
+      } else {
+        const phoneNumber = currentRide.userPhone.startsWith('+') 
+          ? currentRide.userPhone 
+          : `+254${currentRide.userPhone.replace(/^0+/, '')}`;
+        
+        Linking.openURL(`tel:${phoneNumber}`).catch(err => {
+          Alert.alert("Error", "Could not make phone call.");
+          console.error('Error calling:', err);
+        });
+      }
     } else {
       Alert.alert("No Phone", "User phone number not available.");
     }
@@ -524,7 +601,7 @@ export default function DriverProfile() {
       setProcessingPayment(true);
       setPaymentMethod('mpesa');
       
-      console.log('💰 Processing M-Pesa payment...');
+      console.log('💰 Processing M-Pesa payment for user:', currentRide.userPhone);
       
       // Call your payment service
       const response = await fetch(`${PAYMENT_API}/mpesa/stk-push`, {
@@ -590,7 +667,9 @@ export default function DriverProfile() {
 
     Alert.alert(
       'Confirm Cash Payment',
-      `Mark this ride as paid in cash?\n\nAmount: ${currentRide.fare} KES`,
+      `Mark this ride as paid in cash?\n\n` +
+      `Amount: ${currentRide.fare} KES\n` +
+      `User: ${currentRide.userPhone || 'Not specified'}`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -600,7 +679,7 @@ export default function DriverProfile() {
               setProcessingPayment(true);
               setPaymentMethod('cash');
               
-              console.log('💰 Processing cash payment...');
+              console.log('💰 Processing cash payment for user:', currentRide.userPhone);
               
               // Call payment service to record cash payment
               const response = await fetch(`${PAYMENT_API}/cash`, {
@@ -613,7 +692,8 @@ export default function DriverProfile() {
                   amount: currentRide.fare,
                   driverId: profile?._id,
                   driverName: profile?.name,
-                  paymentMethod: 'cash'
+                  paymentMethod: 'cash',
+                  userPhone: currentRide.userPhone
                 }),
               });
 
@@ -628,13 +708,14 @@ export default function DriverProfile() {
                     rideId: currentRide.rideId,
                     amount: currentRide.fare,
                     method: 'cash',
-                    status: 'completed'
+                    status: 'completed',
+                    userPhone: currentRide.userPhone
                   });
                 }
                 
                 Alert.alert(
                   'Payment Recorded',
-                  `Cash payment of ${currentRide.fare} KES has been recorded.`,
+                  `Cash payment of ${currentRide.fare} KES has been recorded for user ${currentRide.userPhone}.`,
                   [
                     {
                       text: 'OK',
@@ -678,7 +759,9 @@ export default function DriverProfile() {
     
     Alert.alert(
       'End Ride',
-      'Are you sure you want to end this ride?',
+      `Are you sure you want to end this ride?\n\n` +
+      `User: ${currentRide.userPhone || 'Not specified'}\n` +
+      `Fare: ${currentRide.fare} KES`,
       [
         { text: 'No', style: 'cancel' },
         { 
@@ -705,7 +788,9 @@ export default function DriverProfile() {
                 
                 Alert.alert(
                   'Ride Completed',
-                  'Please collect payment from the passenger.',
+                  `Please collect payment from the passenger.\n\n` +
+                  `User: ${currentRide.userPhone || 'Not specified'}\n` +
+                  `Amount: ${currentRide.fare} KES`,
                   [
                     { 
                       text: 'OK', 
@@ -757,7 +842,8 @@ export default function DriverProfile() {
         socketRef.current.emit('register_driver', { 
           driverId: profileRef.current._id.toString(),
           location: { lat: latitude, lng: longitude },
-          carType: profileRef.current.carType || 'Standard'
+          carType: profileRef.current.carType || 'Standard',
+          phone: profileRef.current.phone
         });
       }
 
@@ -883,6 +969,7 @@ export default function DriverProfile() {
       <View style={styles.paymentCard}>
         <Text style={styles.paymentTitle}>💳 Collect Payment</Text>
         <Text style={styles.paymentAmount}>{completedRide.fare} KES</Text>
+        <Text style={styles.paymentSubtitle}>From: {completedRide.userPhone || 'User'}</Text>
         <Text style={styles.paymentSubtitle}>Select payment method:</Text>
         
         <View style={styles.paymentButtonsContainer}>
@@ -928,7 +1015,9 @@ export default function DriverProfile() {
           onPress={() => {
             Alert.alert(
               'Skip Payment',
-              'Are you sure? This will mark the ride as completed without payment.',
+              `Are you sure? This will mark the ride as completed without payment.\n\n` +
+              `User: ${completedRide.userPhone || 'Not specified'}\n` +
+              `Amount: ${completedRide.fare} KES`,
               [
                 { text: 'Cancel', style: 'cancel' },
                 {
@@ -955,12 +1044,35 @@ export default function DriverProfile() {
   const renderCurrentRideCard = () => {
     if (!currentRide) return null;
     
+    // ✅ Add verification display
+    console.log('📱 CURRENT RIDE DISPLAY VERIFICATION:');
+    console.log('   Displaying user phone:', currentRide.userPhone);
+    console.log('   Driver profile phone:', profile?.phone);
+    console.log('   Are they the same?', currentRide.userPhone === profile?.phone);
+    
+    const phoneMatchWarning = currentRide.userPhone === profile?.phone;
+    
     return (
       <View style={styles.currentRideCard}>
         <Text style={styles.currentRideTitle}>🚗 Current Ride</Text>
         <Text style={styles.currentRideText}>To: {currentRide.destination}</Text>
-        <Text style={styles.currentRideText}>User: {currentRide.userPhone}</Text>
+        <Text style={styles.currentRideText}>
+          User: {currentRide.userPhone || 'Phone not available'}
+        </Text>
         <Text style={styles.currentRideText}>Fare: {currentRide.fare} KES</Text>
+        <Text style={styles.currentRideText}>
+          Your phone: {profile?.phone || 'Not available'}
+        </Text>
+        
+        {/* ✅ ADD VERIFICATION NOTE */}
+        {phoneMatchWarning && (
+          <View style={styles.warningContainer}>
+            <Ionicons name="warning" size={16} color="#ff4444" />
+            <Text style={styles.warningText}>
+              WARNING: User phone matches your phone!
+            </Text>
+          </View>
+        )}
         
         {rideStatus && (
           <View style={styles.rideStatusContainer}>
@@ -1087,6 +1199,12 @@ export default function DriverProfile() {
         </Text>
       </View>
 
+      {/* ✅ Display driver's phone for verification */}
+      <View style={styles.phoneDisplay}>
+        <Text style={styles.phoneLabel}>Your Phone:</Text>
+        <Text style={styles.phoneValue}>{profile.phone}</Text>
+      </View>
+
       {renderPaymentOptions()}
       
       {renderCurrentRideCard()}
@@ -1094,11 +1212,6 @@ export default function DriverProfile() {
       <View style={styles.card}>
         <Text style={styles.label}>Driver ID:</Text>
         <Text style={styles.smallValue}>{profile._id}</Text>
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.label}>Phone:</Text>
-        <Text style={styles.value}>{profile.phone}</Text>
       </View>
 
       <View style={styles.card}>
@@ -1223,6 +1336,25 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  phoneDisplay: {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    padding: 10,
+    borderRadius: 10,
+    marginBottom: 15,
+    width: '90%',
+    alignItems: 'center',
+  },
+  phoneLabel: {
+    color: '#fff',
+    fontSize: 14,
+    opacity: 0.8,
+  },
+  phoneValue: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginTop: 5,
+  },
   profileImage: {
     width: 150,
     height: 150,
@@ -1241,7 +1373,7 @@ const styles = StyleSheet.create({
   statusContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 15,
     backgroundColor: 'rgba(255,255,255,0.1)',
     padding: 10,
     borderRadius: 10,
@@ -1282,7 +1414,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#4CAF50',
     textAlign: 'center',
-    marginBottom: 10,
+    marginBottom: 5,
   },
   paymentSubtitle: {
     fontSize: 14,
@@ -1357,6 +1489,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     marginBottom: 5,
+  },
+  warningContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,68,68,0.1)',
+    padding: 8,
+    borderRadius: 8,
+    marginVertical: 8,
+    borderWidth: 1,
+    borderColor: '#ff4444',
+  },
+  warningText: {
+    color: '#ff4444',
+    fontSize: 12,
+    fontWeight: '600',
+    marginLeft: 5,
   },
   rideStatusContainer: {
     flexDirection: 'row',
