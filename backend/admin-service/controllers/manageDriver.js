@@ -1,34 +1,32 @@
-// admin-service/controllers/manageDriver.js - COMPLETE FIXED VERSION
+
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const Driver = require("../../shared/models/Driver");
 
-/**
- * GET ALL UNVERIFIED (PENDING) DRIVERS
- */
+
 exports.getUnverifiedDrivers = async (req, res) => {
   try {
     console.log('Fetching unverified drivers...');
     
-    //Drivers with verified = false
+    
     const unverifiedDrivers = await Driver.find({ verified: false })
       .sort({ createdAt: -1 });
     
     console.log(`Found ${unverifiedDrivers.length} drivers with verified: false`);
     
-    //Drivers where verified field doesn't exist (backward compatibility)
+   
     const noVerifiedFieldDrivers = await Driver.find({ 
       verified: { $exists: false } 
     }).sort({ createdAt: -1 });
     
-    console.log(`✅ Found ${noVerifiedFieldDrivers.length} drivers without verified field`);
+    console.log(`Found ${noVerifiedFieldDrivers.length} drivers without verified field`);
     
-    // Combine both results
+  
     const allPendingDrivers = [...unverifiedDrivers, ...noVerifiedFieldDrivers];
     
-    console.log(`📊 Total pending drivers: ${allPendingDrivers.length}`);
+    console.log(`Total pending drivers: ${allPendingDrivers.length}`);
     
-    // Remove duplicates based on _id
+    // Removing duplicates based on _id
     const uniqueDrivers = [];
     const seenIds = new Set();
     
@@ -39,9 +37,9 @@ exports.getUnverifiedDrivers = async (req, res) => {
       }
     }
     
-    console.log(`🚗 Unique pending drivers: ${uniqueDrivers.length}`);
+    console.log(`Unique pending drivers: ${uniqueDrivers.length}`);
     
-    // Format response
+ 
     const formattedDrivers = uniqueDrivers.map(driver => ({
       _id: driver._id,
       name: driver.name || 'Unknown',
@@ -60,7 +58,7 @@ exports.getUnverifiedDrivers = async (req, res) => {
       updatedAt: driver.updatedAt || new Date()
     }));
 
-    // Log first few drivers for debugging
+   
     if (formattedDrivers.length > 0) {
       console.log('📝 Sample pending drivers:');
       formattedDrivers.slice(0, 3).forEach((driver, index) => {
@@ -75,7 +73,7 @@ exports.getUnverifiedDrivers = async (req, res) => {
       message: `Found ${formattedDrivers.length} pending drivers`
     });
   } catch (error) {
-    console.error("❌ Error fetching pending drivers:", error);
+    console.error("Error fetching pending drivers:", error);
     res.status(500).json({
       success: false,
       error: "Failed to fetch pending drivers",
@@ -84,9 +82,7 @@ exports.getUnverifiedDrivers = async (req, res) => {
   }
 };
 
-/**
- * VERIFY / APPROVE DRIVER
- */
+//verify drivers
 exports.verifyDriver = async (req, res) => {
   try {
     const { driverId } = req.body;
@@ -146,7 +142,7 @@ exports.verifyDriver = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error("❌ Error verifying driver:", error);
+    console.error("Error verifying driver:", error);
     res.status(500).json({
       success: false,
       error: "Failed to verify driver",
@@ -155,9 +151,7 @@ exports.verifyDriver = async (req, res) => {
   }
 };
 
-/**
- * GET ALL VERIFIED DRIVERS
- */
+//get verified drivers
 exports.getVerifiedDrivers = async (req, res) => {
   try {
     console.log('📋 Fetching verified drivers...');
@@ -182,9 +176,9 @@ exports.getVerifiedDrivers = async (req, res) => {
         : 'https://via.placeholder.com/150'
     }));
 
-    // Log first few drivers for debugging
+    
     if (formattedDrivers.length > 0) {
-      console.log('📝 Sample verified drivers:');
+      console.log('Sample verified drivers:');
       formattedDrivers.slice(0, 3).forEach((driver, index) => {
         console.log(`${index + 1}. ${driver.name} - ${driver.phone} - Online: ${driver.online}`);
       });
@@ -197,7 +191,7 @@ exports.getVerifiedDrivers = async (req, res) => {
       message: `Found ${formattedDrivers.length} verified drivers`
     });
   } catch (error) {
-    console.error("❌ Error fetching verified drivers:", error);
+    console.error("Error fetching verified drivers:", error);
     res.status(500).json({
       success: false,
       error: "Failed to fetch verified drivers",
@@ -206,9 +200,7 @@ exports.getVerifiedDrivers = async (req, res) => {
   }
 };
 
-/**
- * DELETE / DECLINE DRIVER
- */
+//delete driver
 exports.deleteDriver = async (req, res) => {
   try {
     const { driverId } = req.body;
@@ -226,7 +218,7 @@ exports.deleteDriver = async (req, res) => {
     const driverToDelete = await Driver.findById(driverId);
     
     if (!driverToDelete) {
-      console.log(`❌ Driver not found: ${driverId}`);
+      console.log(`Driver not found: ${driverId}`);
       return res.status(404).json({
         success: false,
         error: "Driver not found"
@@ -244,7 +236,7 @@ exports.deleteDriver = async (req, res) => {
       });
     }
 
-    console.log(`✅ Driver "${driverToDelete.name}" deleted successfully`);
+    console.log(`Driver "${driverToDelete.name}" deleted successfully`);
 
     res.status(200).json({
       success: true,
@@ -256,7 +248,7 @@ exports.deleteDriver = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error("❌ Error deleting driver:", error);
+    console.error("Error deleting driver:", error);
     res.status(500).json({
       success: false,
       error: "Failed to delete driver",
@@ -265,14 +257,12 @@ exports.deleteDriver = async (req, res) => {
   }
 };
 
-/**
- * TOGGLE DRIVER ONLINE STATUS
- */
+//toggle driverOnline
 exports.toggleDriverStatus = async (req, res) => {
   try {
     const { driverId, status } = req.body;
 
-    console.log(`🔄 Toggling driver status: ${driverId} to ${status}`);
+    console.log(`Toggling driver status: ${driverId} to ${status}`);
 
     if (!driverId || typeof status !== "boolean") {
       return res.status(400).json({
@@ -298,7 +288,7 @@ exports.toggleDriverStatus = async (req, res) => {
       });
     }
 
-    console.log(`✅ Driver "${driver.name}" status updated to: ${status ? 'ONLINE' : 'OFFLINE'}`);
+    console.log(`Driver "${driver.name}" status updated to: ${status ? 'ONLINE' : 'OFFLINE'}`);
 
     res.status(200).json({
       success: true,
@@ -311,7 +301,7 @@ exports.toggleDriverStatus = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error("❌ Error toggling driver status:", error);
+    console.error("Error toggling driver status:", error);
     res.status(500).json({
       success: false,
       error: "Failed to update driver status",
@@ -320,9 +310,7 @@ exports.toggleDriverStatus = async (req, res) => {
   }
 };
 
-/**
- * DRIVER STATISTICS
- */
+//driver's stats
 exports.getDriverStats = async (req, res) => {
   try {
     console.log('📊 Fetching driver statistics...');
@@ -341,10 +329,10 @@ exports.getDriverStats = async (req, res) => {
       Driver.countDocuments({ verified: { $exists: false } })
     ]);
 
-    // Calculate total pending (verified: false + no verified field)
+    // Calculate total pending 
     const totalPending = pendingDrivers + driversWithNoVerifiedField;
 
-    console.log(`📊 Stats: Total=${totalDrivers}, Verified=${verifiedDrivers}, Pending=${totalPending}, Active=${activeDrivers}`);
+    console.log(`Stats: Total=${totalDrivers}, Verified=${verifiedDrivers}, Pending=${totalPending}, Active=${activeDrivers}`);
 
     res.status(200).json({
       success: true,
@@ -361,7 +349,7 @@ exports.getDriverStats = async (req, res) => {
       timestamp: new Date().toISOString()
     });
   } catch (error) {
-    console.error("❌ Error fetching driver stats:", error);
+    console.error("Error fetching driver stats:", error);
     res.status(500).json({
       success: false,
       error: "Failed to get driver statistics",
@@ -370,9 +358,7 @@ exports.getDriverStats = async (req, res) => {
   }
 };
 
-/**
- * GET ALL DRIVERS (FOR DEBUGGING)
- */
+//get all drivers
 exports.getAllDrivers = async (req, res) => {
   try {
     console.log('🔍 DEBUG: Fetching ALL drivers...');
@@ -407,7 +393,7 @@ exports.getAllDrivers = async (req, res) => {
       message: `Found ${formattedDrivers.length} total drivers in database`
     });
   } catch (error) {
-    console.error("❌ DEBUG Error fetching all drivers:", error);
+    console.error("DEBUG Error fetching all drivers:", error);
     res.status(500).json({
       success: false,
       error: "Failed to fetch all drivers",

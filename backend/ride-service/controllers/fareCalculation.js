@@ -8,10 +8,10 @@ const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 
 // Pricing model
 const RATES = {
-    BASE_FARE: 120,
-    RATE_PER_KM: 44,
-    RATE_PER_MINUTE: 7.20,
-    MINIMUM_FARE: 180.00
+    BASE_FARE: 1,
+    RATE_PER_KM: 1,
+    RATE_PER_MINUTE: 1.20,
+    MINIMUM_FARE: 1.00
 };
 
 // Calculate final fare

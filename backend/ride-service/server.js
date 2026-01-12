@@ -1,51 +1,57 @@
 // backend/ride-service/server.js
 const express = require('express');
-const connectDB = require("../shared/db");
+const { connectDB, isDBReady } = require("../shared/db"); // Fixed import
 const mongoose = require('mongoose');
 const MongoStore = require('connect-mongo');
 const path = require('path');
+const cors = require('cors'); // Add CORS
 require('dotenv').config();
 
 const session = require('express-session');
+const http = require('http');
+const { Server } = require('socket.io');
 
 const app = express();
+
+/* ========================
+   MONGOOSE SAFETY SETTINGS
+   ======================== */
+mongoose.set("bufferCommands", false);
+mongoose.set("strictQuery", true);
+mongoose.set('autoIndex', false);
+
+// CORS configuration
+app.use(cors({
+  origin: '*', // You can specify specific origins like other services
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// mongo db connection
-connectDB();
+// Logging middleware
+app.use((req, res, next) => {
+  console.log(`🌐 ${req.method} ${req.url} - ${new Date().toISOString()}`);
+  next();
+});
 
-app.use(
-  session({
-    secret: process.env.SESSION_SECRET_KEY,
-    resave: false,
-    saveUninitialized: false,
-    store: MongoStore.create({
-      mongoUrl: process.env.dbURL,
-      collectionName: "sessions"
-    }),
-    cookie: {
-      secure: false,
-      httpOnly: true,
-      maxAge: 1000 * 60 * 60 * 24 * 7,
-    }
-  })
-);
+// Helper function to get connection state text
+const getStateText = (state) => {
+  switch (state) {
+    case 0: return "disconnected";
+    case 1: return "connected";
+    case 2: return "connecting";
+    case 3: return "disconnecting";
+    default: return "unknown";
+  }
+};
 
-// ROUTES
-const FareRoutes = require("./Routes/fare.js");
-const RideActionsRoutes = require("./Routes/rideActions.js");
-
-//api
-app.use('/api', FareRoutes);
-app.use('/api/ride', RideActionsRoutes);
-
-// START SERVER
-const PORT = process.env.PORT || 3005;
-const server = require('http').createServer(app);
-
-// Socket.IO
-const { Server } = require('socket.io');
+/* ========================
+   SOCKET.IO SETUP
+   ======================== */
+const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: '*',
@@ -102,10 +108,8 @@ const sendUserNotification = (rideId, notification) => {
   const userSocket = userSockets.get(rideId);
   
   if (userSocket) {
-    // User is online, send immediately
     userSocket.emit('notification', notification);
   } else {
-    // User is offline, store notification
     if (!pendingUserNotifications.has(rideId)) {
       pendingUserNotifications.set(rideId, []);
     }
@@ -123,10 +127,8 @@ const sendDriverNotification = (driverId, notification) => {
   const driverSocket = driverSockets.get(driverId);
   
   if (driverSocket) {
-    // Driver is online, send immediately
     driverSocket.emit('notification', notification);
   } else {
-    // Driver is offline, store notification
     if (!pendingDriverNotifications.has(driverId)) {
       pendingDriverNotifications.set(driverId, []);
     }
@@ -148,13 +150,11 @@ const cancelRide = async (rideId, reason = 'user_cancelled') => {
       return false;
     }
 
-    // Update ride status
     ride.status = 'cancelled';
     ride.cancellationReason = reason;
     ride.cancelledAt = new Date();
     await ride.save();
 
-    // Notify driver if assigned
     if (ride.assignedDriver) {
       const driverId = ride.assignedDriver.toString();
       const driverSocket = driverSockets.get(driverId);
@@ -167,7 +167,6 @@ const cancelRide = async (rideId, reason = 'user_cancelled') => {
           timestamp: new Date()
         });
         
-        // Also send as notification
         sendDriverNotification(driverId, {
           type: 'ride_cancelled',
           rideId,
@@ -178,14 +177,12 @@ const cancelRide = async (rideId, reason = 'user_cancelled') => {
         console.log(`📢 Notified driver ${driverId} about ride cancellation`);
       }
       
-      // Update driver availability
       await Driver.findByIdAndUpdate(driverId, {
         available: true,
         online: true
       });
     }
 
-    // Notify user
     const userSocket = userSockets.get(rideId);
     if (userSocket) {
       userSocket.emit('ride_cancelled_user', {
@@ -195,14 +192,12 @@ const cancelRide = async (rideId, reason = 'user_cancelled') => {
       });
     }
 
-    // Clean up pending responses
     if (pendingResponses.has(rideId)) {
       const { timeoutId } = pendingResponses.get(rideId);
       clearTimeout(timeoutId);
       pendingResponses.delete(rideId);
     }
 
-    // Clean up socket mappings
     userSockets.delete(rideId);
     const socketId = Array.from(socketToUser.entries())
       .find(([sid, rid]) => rid === rideId)?.[0];
@@ -227,17 +222,14 @@ const startRide = async (rideId, driverId) => {
       return false;
     }
 
-    // Update ride status
     ride.status = 'in_progress';
     ride.startedAt = new Date();
     await ride.save();
 
-    // Update driver status
     await Driver.findByIdAndUpdate(driverId, {
-      available: false // Driver is busy with current ride
+      available: false
     });
 
-    // Notify user
     const userSocket = userSockets.get(rideId);
     if (userSocket) {
       userSocket.emit('ride_started', {
@@ -265,18 +257,15 @@ const endRide = async (rideId, driverId) => {
       return false;
     }
 
-    // Update ride status
     ride.status = 'completed';
     ride.completedAt = new Date();
     await ride.save();
 
-    // Update driver status
     await Driver.findByIdAndUpdate(driverId, {
-      available: true, // Driver is available again
+      available: true,
       online: true
     });
 
-    // Notify user
     const userSocket = userSockets.get(rideId);
     if (userSocket) {
       userSocket.emit('ride_completed', {
@@ -288,7 +277,6 @@ const endRide = async (rideId, driverId) => {
       });
     }
 
-    // Clean up socket mappings
     userSockets.delete(rideId);
     const socketId = Array.from(socketToUser.entries())
       .find(([sid, rid]) => rid === rideId)?.[0];
@@ -304,10 +292,12 @@ const endRide = async (rideId, driverId) => {
   }
 };
 
+/* ========================
+   SOCKET.IO EVENT HANDLERS
+   ======================== */
 io.on('connection', (socket) => {
   console.log('🔌 Socket connected:', socket.id);
 
-  // User registers with ride
   socket.on('register_user', (payload) => {
     try {
       const { rideId, userId } = payload || {};
@@ -317,7 +307,6 @@ io.on('connection', (socket) => {
       socketToUser.set(socket.id, rideId);
       console.log(`👤 User registered for ride ${rideId} on socket ${socket.id}`);
       
-      // Send any pending notifications for this ride
       if (pendingUserNotifications.has(rideId)) {
         const notifications = pendingUserNotifications.get(rideId);
         notifications.forEach(notification => {
@@ -331,7 +320,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Driver registers
   socket.on('register_driver', async (payload) => {
     try {
       console.log('📝 register_driver event received:', payload);
@@ -344,7 +332,6 @@ io.on('connection', (socket) => {
       
       const driverIdStr = driverId.toString();
       
-      // Check if driver exists in database
       const driver = await Driver.findById(driverIdStr);
       if (!driver) {
         console.log(`❌ Driver ${driverIdStr} not found in database`);
@@ -353,11 +340,9 @@ io.on('connection', (socket) => {
       
       console.log(`✅ Driver found in DB: ${driver.name} (${driverIdStr})`);
       
-      // Store socket connection
       driverSockets.set(driverIdStr, socket);
       socketToDriver.set(socket.id, driverIdStr);
       
-      // Update driver availability when they register
       await Driver.findByIdAndUpdate(driverIdStr, { 
         available: true,
         online: true,
@@ -370,7 +355,6 @@ io.on('connection', (socket) => {
         })
       });
       
-      // Send any pending notifications for this driver
       if (pendingDriverNotifications.has(driverIdStr)) {
         const notifications = pendingDriverNotifications.get(driverIdStr);
         notifications.forEach(notification => {
@@ -388,13 +372,11 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Driver location updates
   socket.on('driver_location', async (payload) => {
     try {
       const { driverId, lat, lng, available } = payload || {};
       if (!driverId || !lat || !lng) return;
 
-      // Update driver location in database
       await Driver.findByIdAndUpdate(driverId, {
         lastKnownLocation: {
           lat: lat,
@@ -410,7 +392,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Driver responds to ride request
   socket.on('driver_response', (payload) => {
     console.log('🔄 driver_response received:', payload);
     
@@ -420,13 +401,11 @@ io.on('connection', (socket) => {
       return;
     }
     
-    // Check if we're waiting for this response
     if (pendingResponses.has(rideId)) {
       const { resolve, timeoutId } = pendingResponses.get(rideId);
       clearTimeout(timeoutId);
       pendingResponses.delete(rideId);
       
-      // Resolve the promise with the driver's response
       resolve({ 
         accepted, 
         driverId, 
@@ -434,7 +413,6 @@ io.on('connection', (socket) => {
       });
     }
     
-    // Send notification to user
     if (accepted) {
       sendUserNotification(rideId, {
         type: 'driver_accepted',
@@ -446,11 +424,9 @@ io.on('connection', (socket) => {
       });
     }
     
-    // Broadcast to all (including the matching controller)
     io.emit('driver_response_server', payload);
   });
 
-  // Ride request sent to driver
   socket.on('ride_request_sent', (payload) => {
     const { driverId, rideId } = payload || {};
     if (!driverId || !rideId) return;
@@ -463,7 +439,6 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Update location event
   socket.on('update_location', async (payload) => {
     try {
       const { driverId, location } = payload || {};
@@ -482,10 +457,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Get pending notifications
   socket.on('get_pending_notifications', async (payload) => {
     try {
-      const { userId, userType } = payload || {}; // userType: 'user' or 'driver'
+      const { userId, userType } = payload || {};
       
       if (userType === 'user') {
         const rideId = socketToUser.get(socket.id);
@@ -515,7 +489,6 @@ io.on('connection', (socket) => {
       driverSockets.delete(driverId);
       socketToDriver.delete(socket.id);
       
-      // Mark driver as offline when they disconnect
       try {
         await Driver.findByIdAndUpdate(driverId, { 
           online: false,
@@ -544,32 +517,296 @@ io.on('connection', (socket) => {
   });
 });
 
-// Expose socket maps and helper functions to the app
-app.set('io', io);
-app.set('driverSockets', driverSockets);
-app.set('userSockets', userSockets);
-app.set('waitForDriverResponse', waitForDriverResponse);
-app.set('sendUserNotification', sendUserNotification);
-app.set('sendDriverNotification', sendDriverNotification);
-app.set('cancelRide', cancelRide);
-app.set('startRide', startRide);
-app.set('endRide', endRide);
+/* ========================
+   START SERVER
+   ======================== */
+const PORT = process.env.PORT || 3005;
 
-// Add debug endpoint to check connected drivers
-app.get('/debug/drivers', (req, res) => {
-  const connectedDrivers = Array.from(driverSockets.keys());
-  res.json({
-    connectedDrivers,
-    total: connectedDrivers.length,
-    userSockets: Array.from(userSockets.keys()),
-    pendingResponses: Array.from(pendingResponses.keys()),
-    pendingUserNotifications: Array.from(pendingUserNotifications.keys()),
-    pendingDriverNotifications: Array.from(pendingDriverNotifications.keys())
+async function startServer() {
+  try {
+    console.log("=".repeat(50));
+    console.log("🚀 Starting Ride Service...");
+    console.log("=".repeat(50));
+    
+    console.log("🔗 Step 1: Connecting to MongoDB...");
+    
+    // ✅ CONNECT TO DB FIRST
+    let dbConnection;
+    try {
+      dbConnection = await connectDB();
+      console.log(`✅ MongoDB connection initiated`);
+    } catch (connectError) {
+      console.error("❌ MongoDB connection failed:", connectError.message);
+    }
+
+    // ✅ SIMPLE CONNECTION CHECK
+    console.log("⏳ Checking database connection state...");
+    
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    const dbReady = isDBReady();
+    
+    if (!dbReady) {
+      console.warn("⚠️ Database not fully ready - starting service anyway");
+      console.warn(`⚠️ Current DB state: ${getStateText(mongoose.connection.readyState)}`);
+    } else {
+      console.log(`✅ Database connected and ready: ${mongoose.connection.name || 'Unknown'}`);
+      console.log(`📊 DB Host: ${mongoose.connection.host || 'Unknown'}`);
+    }
+
+    // SESSION setup (after DB connection attempt)
+    app.use(
+      session({
+        secret: process.env.SESSION_SECRET_KEY || 'ride-secret-key',
+        resave: false,
+        saveUninitialized: false,
+        store: MongoStore.create({
+          mongoUrl: process.env.dbURL,
+          collectionName: "ride_sessions"
+        }),
+        cookie: {
+          secure: false,
+          httpOnly: true,
+          maxAge: 1000 * 60 * 60 * 24 * 7,
+        }
+      })
+    );
+
+    /* ========================
+       LOAD AND VALIDATE ROUTES
+       ======================== */
+    console.log("🛣️  Step 2: Loading routes...");
+    
+    // Define a safe route loader function
+    const loadRoute = (routePath, routeName) => {
+      try {
+        const route = require(routePath);
+        
+        if (typeof route === 'function') {
+          console.log(`✅ ${routeName} route loaded successfully`);
+          return route;
+        } else if (route && typeof route === 'object' && typeof route.router === 'function') {
+          console.log(`✅ ${routeName} router loaded successfully`);
+          return route.router || route;
+        } else {
+          console.error(`❌ ${routeName} is not a valid route handler`);
+          console.log(`⚠️ Creating dummy route for ${routeName}...`);
+          
+          const dummyRouter = express.Router();
+          dummyRouter.all('*', (req, res) => {
+            res.status(503).json({
+              success: false,
+              error: 'Route temporarily unavailable',
+              message: `${routeName} route is not properly configured`,
+              path: req.path
+            });
+          });
+          return dummyRouter;
+        }
+      } catch (error) {
+        console.error(`❌ Failed to load ${routeName}:`, error.message);
+        console.log(`⚠️ Creating fallback route for ${routeName}...`);
+        
+        const fallbackRouter = express.Router();
+        fallbackRouter.all('*', (req, res) => {
+          res.status(503).json({
+            success: false,
+            error: 'Service temporarily unavailable',
+            message: `${routeName} is not available: ${error.message}`,
+            path: req.path
+          });
+        });
+        return fallbackRouter;
+      }
+    };
+
+    // Load routes safely
+    const FareRoutes = loadRoute('./Routes/fare.js', 'Fare Calculation');
+    const RideActionsRoutes = loadRoute('./Routes/rideActions.js', 'Ride Actions');
+
+    // Use routes
+    app.use('/api', FareRoutes);
+    app.use('/api/ride', RideActionsRoutes);
+    console.log("✅ All routes mounted");
+
+    /* ========================
+       HEALTH & TEST ROUTES
+       ======================== */
+    
+    // Root endpoint
+    app.get('/', (req, res) => {
+      const state = mongoose.connection.readyState;
+      const connectedDrivers = Array.from(driverSockets.keys());
+      
+      res.json({ 
+        success: true, 
+        service: 'Safari Ride Service',
+        status: 'running',
+        database: state === 1 ? "connected" : "disconnected",
+        dbState: state,
+        dbStateText: getStateText(state),
+        socketStats: {
+          connectedDrivers: connectedDrivers.length,
+          connectedUsers: Array.from(userSockets.keys()).length,
+          totalSockets: io.engine.clientsCount
+        },
+        timestamp: new Date().toISOString(),
+        endpoints: {
+          health: '/api/health',
+          dbHealth: '/db-health',
+          debug: '/debug/drivers',
+          fare: '/api/fare',
+          ride: '/api/ride'
+        }
+      });
+    });
+
+    // Database health endpoint
+    app.get('/db-health', async (req, res) => {
+      try {
+        const state = mongoose.connection.readyState;
+        
+        res.json({
+          status: state === 1 ? "connected" : "disconnected",
+          state: state,
+          stateText: getStateText(state),
+          readyState: state,
+          isDBReady: isDBReady(),
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        res.status(500).json({
+          status: "error",
+          error: error.message,
+          state: mongoose.connection.readyState
+        });
+      }
+    });
+
+    // Health check
+    app.get('/api/health', (req, res) => {
+      const state = mongoose.connection.readyState;
+      
+      res.json({ 
+        success: true, 
+        message: 'Ride Service is running',
+        port: process.env.PORT || 3005,
+        database: state === 1 ? 'connected' : 'disconnected',
+        socketConnections: io.engine.clientsCount,
+        timestamp: new Date().toISOString()
+      });
+    });
+
+    // Debug endpoint to check connected drivers
+    app.get('/debug/drivers', (req, res) => {
+      const connectedDrivers = Array.from(driverSockets.keys());
+      res.json({
+        connectedDrivers,
+        total: connectedDrivers.length,
+        userSockets: Array.from(userSockets.keys()),
+        pendingResponses: Array.from(pendingResponses.keys()),
+        pendingUserNotifications: Array.from(pendingUserNotifications.keys()),
+        pendingDriverNotifications: Array.from(pendingDriverNotifications.keys())
+      });
+    });
+
+    // Expose socket maps and helper functions to the app
+    app.set('io', io);
+    app.set('driverSockets', driverSockets);
+    app.set('userSockets', userSockets);
+    app.set('waitForDriverResponse', waitForDriverResponse);
+    app.set('sendUserNotification', sendUserNotification);
+    app.set('sendDriverNotification', sendDriverNotification);
+    app.set('cancelRide', cancelRide);
+    app.set('startRide', startRide);
+    app.set('endRide', endRide);
+
+    /* ========================
+       ERROR HANDLING
+       ======================== */
+    app.use((err, req, res, next) => {
+      console.error("❌ Server error:", err.message);
+      res.status(500).json({
+        success: false,
+        error: "Internal server error",
+        details: process.env.NODE_ENV === "development" ? err.message : "Please try again later"
+      });
+    });
+
+    // 404 handler
+    app.use((req, res) => {
+      res.status(404).json({
+        success: false,
+        error: "Route not found",
+        path: req.path,
+        method: req.method
+      });
+    });
+
+    // ✅ Start listening
+    console.log("=".repeat(50));
+    console.log(`🚕 Ride Service running on port ${PORT}`);
+    console.log(`🗄️  Database: ${isDBReady() ? 'CONNECTED' : 'DISCONNECTED'}`);
+    console.log(`📊 DB State: ${getStateText(mongoose.connection.readyState)}`);
+    console.log(`🔌 Socket.IO: Ready for connections`);
+    console.log(`🕐 Time: ${new Date().toISOString()}`);
+    console.log("=".repeat(50));
+    
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`✅ Server listening on http://localhost:${PORT}`);
+      console.log(`✅ Health check: http://localhost:${PORT}/api/health`);
+      console.log(`✅ Debug endpoint: http://localhost:${PORT}/debug/drivers`);
+      console.log(`💰 Fare endpoint: http://localhost:${PORT}/api/fare`);
+      console.log(`🏠 Home: http://localhost:${PORT}/`);
+    });
+
+  } catch (err) {
+    console.error("❌ Fatal startup error:", err.message);
+    console.error(err.stack);
+    process.exit(1);
+  }
+}
+
+startServer();
+
+/* ========================
+   GRACEFUL SHUTDOWN
+   ======================== */
+process.on("SIGINT", async () => {
+  console.log("\n" + "=".repeat(50));
+  console.log("🛑 Shutting down Ride Service gracefully...");
+  console.log("=".repeat(50));
+  
+  // Close all socket connections
+  io.close(() => {
+    console.log("🔌 Socket.IO connections closed");
   });
+  
+  if (mongoose.connection.readyState === 1) {
+    try {
+      await mongoose.connection.close();
+      console.log("🧹 MongoDB connection closed");
+    } catch (err) {
+      console.error("❌ Error closing MongoDB connection:", err.message);
+    }
+  }
+  
+  console.log("📊 Final stats:");
+  console.log(`   Connected drivers: ${driverSockets.size}`);
+  console.log(`   Connected users: ${userSockets.size}`);
+  console.log(`   Pending notifications: ${pendingUserNotifications.size + pendingDriverNotifications.size}`);
+  
+  console.log("👋 Ride Service shutdown complete");
+  process.exit(0);
 });
 
-// Start server
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚗 Ride Service running on port ${PORT}`);
-  console.log(`📍 Debug endpoint: http://localhost:${PORT}/debug/drivers`);
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error.message);
 });
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise);
+});
+
+module.exports = { app, server, io };

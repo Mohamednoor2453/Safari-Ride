@@ -1,4 +1,4 @@
-// app/admin.jsx - ENHANCED VERSION
+// app/admin.jsx - COMPLETE FILE WITH PAYMENT NAVIGATION
 import React, { useState, useEffect } from 'react';
 import { 
   View, Text, StyleSheet, ScrollView, TouchableOpacity, 
@@ -30,6 +30,11 @@ export default function AdminPanel() {
   });
   const [debugInfo, setDebugInfo] = useState('');
   const [showDebug, setShowDebug] = useState(false);
+
+  // Navigation to payments
+  const navigateToPayments = () => {
+    router.push('/admin-payments');
+  };
 
   const fetchDrivers = async () => {
     try {
@@ -461,8 +466,33 @@ ${verifiedError ? `Verified Error: ${verifiedError}` : ''}`;
           <Text style={styles.headerSubtitle}>Manage your Safari Ride system</Text>
         </View>
         
-        <TouchableOpacity onPress={viewAllDrivers} style={styles.debugButton}>
-          <Ionicons name="bug-outline" size={20} color="#FFFFFF" />
+        <TouchableOpacity onPress={navigateToPayments} style={styles.paymentButton}>
+          <Ionicons name="cash-outline" size={24} color="#FFFFFF" />
+        </TouchableOpacity>
+      </View>
+
+      {/* Navigation Menu */}
+      <View style={styles.navMenu}>
+        <TouchableOpacity 
+          style={[styles.navButton, activeTab === 'pending' && styles.activeNavButton]}
+          onPress={() => setActiveTab('pending')}
+        >
+          <Ionicons 
+            name="people-outline" 
+            size={20} 
+            color={activeTab === 'pending' ? '#FFFFFF' : Colors.primary} 
+          />
+          <Text style={[styles.navButtonText, activeTab === 'pending' && styles.activeNavButtonText]}>
+            Drivers
+          </Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity 
+          style={styles.navButton}
+          onPress={navigateToPayments}
+        >
+          <Ionicons name="cash-outline" size={20} color={Colors.primary} />
+          <Text style={styles.navButtonText}>Payments</Text>
         </TouchableOpacity>
       </View>
 
@@ -786,8 +816,44 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     opacity: 0.9,
   },
-  debugButton: {
+  paymentButton: {
     padding: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 8,
+  },
+  navMenu: {
+    flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    marginHorizontal: 20,
+    marginTop: 10,
+    borderRadius: 15,
+    padding: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  navButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    gap: 8,
+  },
+  activeNavButton: {
+    backgroundColor: Colors.primary,
+  },
+  navButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.primary,
+  },
+  activeNavButtonText: {
+    color: '#FFFFFF',
   },
   statsContainer: {
     flexDirection: 'row',

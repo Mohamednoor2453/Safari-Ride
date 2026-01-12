@@ -189,6 +189,12 @@ export default function RootLayout() {
                   marginLeft: 10,
                   padding: 5
                 })}
+
+                 name="admin-payments"
+  options={{ 
+    title: "Payment Management",
+    headerShown: false, // We'll use custom header
+  }}
               >
                 <Ionicons
                   name="arrow-back"

@@ -17,11 +17,11 @@ app.use('/api', authRoutes);
 mongoose
   .connect(process.env.dbURL)
   .then(() => console.log('✅ MongoDB connected'))
-  .catch((err) => console.error('❌ MongoDB error:', err));
+  .catch((err) => console.error('MongoDB error:', err));
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('❌ Server error:', err.stack);
+  console.error('Server error:', err.stack);
   res.status(500).json({
     success: false,
     message: 'Internal Server Error',

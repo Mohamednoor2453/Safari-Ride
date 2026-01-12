@@ -419,7 +419,7 @@ exports.checkAPIStatus = async (req, res) => {
   }
 };
 
-// ------------------- DIRECT SMS TEST -------------------
+
 exports.directSMSTest = async (req, res) => {
   try {
     const { phone, message } = req.body;
@@ -465,7 +465,7 @@ exports.directSMSTest = async (req, res) => {
   }
 };
 
-// ------------------- TEST SMS ENDPOINT -------------------
+
 exports.testSMS = async (req, res) => {
   try {
     const { phone } = req.body;

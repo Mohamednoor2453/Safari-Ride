@@ -1,4 +1,4 @@
-// frontend/app/driverProfile.jsx - COMPLETELY FIXED VERSION
+// frontend/app/driverProfile.jsx - FIXED PAYMENT PROCESSING
 import React, { useEffect, useState, useRef } from 'react';
 import {
   View,
@@ -25,7 +25,12 @@ const SOCKET_URL = 'http://192.168.1.112:3005';
 const PROFILE_API = 'http://192.168.1.112:3004/api/driverProfile';
 const TOGGLE_ONLINE_API = 'http://192.168.1.112:3004/api/toggleOnline';
 const RIDE_API = "http://192.168.1.112:3005/api/ride";
-const PAYMENT_API = "http://192.168.1.112:3007/api/payments";
+
+// Payment endpoints
+const PAYMENT_BASE_URL = "http://192.168.1.112:3007";
+const MPESA_PAYMENT_ENDPOINT = `${PAYMENT_BASE_URL}/api/payments/mpesa`;
+const CASH_PAYMENT_ENDPOINT = `${PAYMENT_BASE_URL}/api/payments/cash`;
+const PAYMENT_STATUS_ENDPOINT = `${PAYMENT_BASE_URL}/api/payments/status`;
 
 // Storage keys
 const DRIVER_TOKEN_KEY = 'driverToken';
@@ -50,6 +55,8 @@ export default function DriverProfile() {
   const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [completedRide, setCompletedRide] = useState(null);
   const [authError, setAuthError] = useState(null);
+  const [paymentStatus, setPaymentStatus] = useState(null);
+  const [checkPaymentStatus, setCheckPaymentStatus] = useState(false);
   
   const socketRef = useRef(null);
   const locationWatcherRef = useRef(null);
@@ -115,7 +122,7 @@ export default function DriverProfile() {
             driverId: profileData._id.toString(),
             name: profileData.name,
             carType: profileData.carType,
-            phone: profileData.phone // Include driver phone for reference
+            phone: profileData.phone
           });
         }
         
@@ -195,6 +202,31 @@ export default function DriverProfile() {
     } catch (error) {
       console.error('Error fetching ride status:', error);
     }
+  };
+
+  // Check payment status
+  const checkPayment = async (checkoutRequestID, paymentId) => {
+    if (!checkoutRequestID && !paymentId) return;
+    
+    try {
+      console.log('🔍 Checking payment status...');
+      const params = new URLSearchParams();
+      if (checkoutRequestID) params.append('checkoutRequestID', checkoutRequestID);
+      if (paymentId) params.append('paymentId', paymentId);
+      
+      const response = await fetch(`${PAYMENT_STATUS_ENDPOINT}?${params.toString()}`);
+      const data = await response.json();
+      
+      console.log('📊 Payment status check:', data);
+      
+      if (data.success) {
+        setPaymentStatus(data.payment.status);
+        return data.payment.status;
+      }
+    } catch (error) {
+      console.error('Error checking payment status:', error);
+    }
+    return null;
   };
 
   useEffect(() => {
@@ -590,7 +622,7 @@ export default function DriverProfile() {
     }
   };
   
-  // Process M-Pesa Payment
+  // Process M-Pesa Payment - FIXED
   const processMpesaPayment = async () => {
     if (!currentRide?.rideId || !currentRide?.userPhone || !currentRide?.fare) {
       Alert.alert('Error', 'Missing ride information for payment');
@@ -602,9 +634,9 @@ export default function DriverProfile() {
       setPaymentMethod('mpesa');
       
       console.log('💰 Processing M-Pesa payment for user:', currentRide.userPhone);
+      console.log('📤 Sending request to endpoint:', MPESA_PAYMENT_ENDPOINT);
       
-      // Call your payment service
-      const response = await fetch(`${PAYMENT_API}/mpesa/stk-push`, {
+      const response = await fetch(MPESA_PAYMENT_ENDPOINT, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -615,22 +647,67 @@ export default function DriverProfile() {
           amount: currentRide.fare,
           driverId: profile?._id,
           driverName: profile?.name,
-          description: `Safari Ride Payment - ${currentRide.destination}`
+          description: `Safari Ride Payment - ${currentRide.destination || 'Ride'}`
         }),
       });
 
       const data = await response.json();
+      console.log('💾 Payment API Response:', data);
       
       if (data.success) {
-        setPaymentSuccess(true);
+        // Reset processing state immediately
+        setProcessingPayment(false);
+        setPaymentMethod(null);
+        
+        // Show success message
         Alert.alert(
-          'Payment Initiated',
-          `M-Pesa payment request sent to ${currentRide.userPhone}. Amount: ${currentRide.fare} KES`,
+          'Payment Initiated Successfully!',
+          `✅ M-Pesa payment request sent to ${currentRide.userPhone}\n\n` +
+          `Amount: ${currentRide.fare} KES\n` +
+          `Payment ID: ${data.paymentId}\n` +
+          `Checkout ID: ${data.checkoutRequestID}\n\n` +
+          `Please ask the user to check their phone for an M-Pesa prompt.`,
           [
             {
               text: 'OK',
               onPress: () => {
-                setPaymentModalVisible(true);
+                // Start checking payment status
+                if (data.checkoutRequestID) {
+                  setCheckPaymentStatus(true);
+                  // Check payment status every 10 seconds
+                  const checkInterval = setInterval(async () => {
+                    const status = await checkPayment(data.checkoutRequestID, data.paymentId);
+                    if (status === 'completed') {
+                      clearInterval(checkInterval);
+                      setPaymentSuccess(true);
+                      Alert.alert(
+                        'Payment Completed!',
+                        'The user has completed the M-Pesa payment.',
+                        [
+                          {
+                            text: 'Great!',
+                            onPress: () => {
+                              // Clear everything after successful payment
+                              setCurrentRide(null);
+                              setRideStatus(null);
+                              setShowPaymentOptions(false);
+                              setPaymentSuccess(false);
+                              setCompletedRide(null);
+                              clearDriverState();
+                              setCheckPaymentStatus(false);
+                            }
+                          }
+                        ]
+                      );
+                    }
+                  }, 10000);
+                  
+                  // Auto-stop checking after 5 minutes
+                  setTimeout(() => {
+                    clearInterval(checkInterval);
+                    setCheckPaymentStatus(false);
+                  }, 300000);
+                }
               }
             }
           ]
@@ -642,7 +719,8 @@ export default function DriverProfile() {
             rideId: currentRide.rideId,
             amount: currentRide.fare,
             method: 'mpesa',
-            status: 'pending'
+            status: 'pending',
+            checkoutRequestID: data.checkoutRequestID || data.paymentId
           });
         }
       } else {
@@ -652,13 +730,13 @@ export default function DriverProfile() {
       }
     } catch (error) {
       console.error('M-Pesa payment error:', error);
-      Alert.alert('Payment Error', 'Failed to process M-Pesa payment');
+      Alert.alert('Payment Error', 'Failed to process M-Pesa payment: ' + error.message);
       setProcessingPayment(false);
       setPaymentMethod(null);
     }
   };
 
-  // Process Cash Payment
+  // Process Cash Payment - FIXED
   const processCashPayment = async () => {
     if (!currentRide?.rideId || !currentRide?.fare) {
       Alert.alert('Error', 'Missing ride information for payment');
@@ -671,7 +749,11 @@ export default function DriverProfile() {
       `Amount: ${currentRide.fare} KES\n` +
       `User: ${currentRide.userPhone || 'Not specified'}`,
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: 'Cancel', style: 'cancel', onPress: () => {
+          // Reset states if cancelled
+          setProcessingPayment(false);
+          setPaymentMethod(null);
+        }},
         {
           text: 'Confirm Payment',
           onPress: async () => {
@@ -680,9 +762,9 @@ export default function DriverProfile() {
               setPaymentMethod('cash');
               
               console.log('💰 Processing cash payment for user:', currentRide.userPhone);
+              console.log('📤 Sending request to endpoint:', CASH_PAYMENT_ENDPOINT);
               
-              // Call payment service to record cash payment
-              const response = await fetch(`${PAYMENT_API}/cash`, {
+              const response = await fetch(CASH_PAYMENT_ENDPOINT, {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
@@ -698,9 +780,12 @@ export default function DriverProfile() {
               });
 
               const data = await response.json();
+              console.log('💾 Cash Payment Response:', data);
               
               if (data.success) {
                 setPaymentSuccess(true);
+                setProcessingPayment(false);
+                setPaymentMethod(null);
                 
                 // Notify socket server
                 if (socketRef.current) {
@@ -709,16 +794,19 @@ export default function DriverProfile() {
                     amount: currentRide.fare,
                     method: 'cash',
                     status: 'completed',
-                    userPhone: currentRide.userPhone
+                    userPhone: currentRide.userPhone,
+                    paymentId: data.paymentId
                   });
                 }
                 
                 Alert.alert(
-                  'Payment Recorded',
-                  `Cash payment of ${currentRide.fare} KES has been recorded for user ${currentRide.userPhone}.`,
+                  'Payment Recorded Successfully!',
+                  `✅ Cash payment of ${currentRide.fare} KES has been recorded.\n\n` +
+                  `User: ${currentRide.userPhone || 'Not specified'}\n` +
+                  `Payment ID: ${data.paymentId || 'N/A'}`,
                   [
                     {
-                      text: 'OK',
+                      text: 'Done',
                       onPress: () => {
                         // Clear everything after payment
                         setCurrentRide(null);
@@ -727,8 +815,6 @@ export default function DriverProfile() {
                         setPaymentSuccess(false);
                         setCompletedRide(null);
                         clearDriverState();
-                        setProcessingPayment(false);
-                        setPaymentMethod(null);
                       }
                     }
                   ]
@@ -740,7 +826,7 @@ export default function DriverProfile() {
               }
             } catch (error) {
               console.error('Cash payment error:', error);
-              Alert.alert('Payment Error', 'Failed to process cash payment');
+              Alert.alert('Payment Error', 'Failed to process cash payment: ' + error.message);
               setProcessingPayment(false);
               setPaymentMethod(null);
             }
@@ -976,10 +1062,15 @@ export default function DriverProfile() {
           <TouchableOpacity 
             style={[styles.paymentButton, styles.mpesaButton]}
             onPress={processMpesaPayment}
-            disabled={processingPayment}
+            disabled={processingPayment || checkPaymentStatus}
           >
-            {processingPayment && paymentMethod === 'mpesa' ? (
+            {(processingPayment && paymentMethod === 'mpesa') ? (
               <ActivityIndicator size="small" color="#fff" />
+            ) : checkPaymentStatus ? (
+              <>
+                <Ionicons name="refresh-circle" size={24} color="#fff" />
+                <Text style={styles.paymentButtonText}>Checking Payment...</Text>
+              </>
             ) : (
               <>
                 <Ionicons name="phone-portrait" size={24} color="#fff" />
@@ -993,7 +1084,7 @@ export default function DriverProfile() {
             onPress={processCashPayment}
             disabled={processingPayment}
           >
-            {processingPayment && paymentMethod === 'cash' ? (
+            {(processingPayment && paymentMethod === 'cash') ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
               <>
@@ -1007,6 +1098,12 @@ export default function DriverProfile() {
         {processingPayment && (
           <Text style={styles.processingText}>
             Processing {paymentMethod === 'mpesa' ? 'M-Pesa' : 'Cash'} payment...
+          </Text>
+        )}
+        
+        {checkPaymentStatus && (
+          <Text style={styles.checkingText}>
+            ⏳ Checking M-Pesa payment status... (Will auto-detect completion)
           </Text>
         )}
         
@@ -1029,6 +1126,9 @@ export default function DriverProfile() {
                     setShowPaymentOptions(false);
                     setCompletedRide(null);
                     clearDriverState();
+                    setProcessingPayment(false);
+                    setPaymentMethod(null);
+                    setCheckPaymentStatus(false);
                   }
                 }
               ]
@@ -1355,6 +1455,13 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginTop: 5,
   },
+  checkingText: {
+    fontSize: 12,
+    color: '#FF9800',
+    textAlign: 'center',
+    fontStyle: 'italic',
+    marginBottom: 5,
+  },
   profileImage: {
     width: 150,
     height: 150,
@@ -1461,6 +1568,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#ccc',
     alignItems: 'center',
+    marginTop: 10,
   },
   skipPaymentText: {
     color: '#666',
